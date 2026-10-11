@@ -70,6 +70,9 @@ async def _trigger_history(
             )
         except ClientError as err:
             errors.append(_master_error(entry, master, err))
+            # Peers are read through the connected master, so they would fail too
+            if master is None:
+                break
             continue
 
         for item in log[-call.data[ATTR_LIMIT] :]:
@@ -107,6 +110,9 @@ async def _system_log(
             )
         except ClientError as err:
             errors.append(_master_error(entry, master, err))
+            # Peers are read through the connected master, so they would fail too
+            if master is None:
+                break
             continue
 
         entries.extend(
