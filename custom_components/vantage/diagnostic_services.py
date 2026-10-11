@@ -1,7 +1,6 @@
 """Services that read the controller's diagnostics, as InFusion Diagnostics shows them."""
 
 from collections.abc import Awaitable, Callable, Coroutine
-import heapq
 from typing import Any
 
 from aiovantage.config_client import DiagnosticInterface, SysLogType
@@ -49,10 +48,8 @@ async def _trigger_history(
 ) -> list[JsonValueType]:
     vantage = entry.runtime_data.client
 
-    per_master: list[list[dict[str, Any]]] = []
+    entries: list[JsonValueType] = []
     for master in _masters(entry):
-        entries: list[dict[str, Any]] = []
-        per_master.append(entries)
         log = await DiagnosticInterface.get_event_log(
             vantage.config_client, master=master
         )
@@ -75,7 +72,7 @@ async def _trigger_history(
                 | described
             )
 
-    return _merge_by_time(per_master)
+    return entries
 
 
 async def _system_log(
@@ -83,53 +80,25 @@ async def _system_log(
 ) -> list[JsonValueType]:
     vantage = entry.runtime_data.client
 
-    per_master: list[list[dict[str, Any]]] = []
+    entries: list[JsonValueType] = []
     for master in _masters(entry):
         log = await DiagnosticInterface.get_sys_log(
             vantage.config_client, master=master
         )
-        per_master.append(
-            [
-                {
-                    # Month, day and time in the controller's local time, eg. "01-02T03:04:05"
-                    "time": item.time,
-                    "host": vantage.host,
-                    "master": master or vantage.master_number,
-                    "type": _sys_log_type_name(item.log_type, item.type),
-                    "source": item.src,
-                    "message": (item.msg or "").strip(),
-                }
-                for item in log[-call.data[ATTR_LIMIT] :]
-            ]
+        entries.extend(
+            {
+                # Month, day and time in the controller's local time, eg. "01-02T03:04:05"
+                "time": item.time,
+                "host": vantage.host,
+                "master": master or vantage.master_number,
+                "type": _sys_log_type_name(item.log_type, item.type),
+                "source": item.src,
+                "message": (item.msg or "").strip(),
+            }
+            for item in log[-call.data[ATTR_LIMIT] :]
         )
 
-    return _merge_by_time(per_master)
-
-
-type Keyed = tuple[int, str, int, int, dict[str, Any]]
-
-
-def _merge_by_time(per_master: list[list[dict[str, Any]]]) -> list[JsonValueType]:
-    # Each master's list is already oldest first, so interleave them by time
-    keyed = [_year_keyed(entries, master) for master, entries in enumerate(per_master)]
-    return [entry for *_, entry in heapq.merge(*keyed)]
-
-
-def _year_keyed(entries: list[dict[str, Any]], master: int) -> list[Keyed]:
-    # System log times carry no year, eg. "12-31T23:59:00" then "01-01T00:01:00". Count
-    # years back from each master's newest entry, taken as this year, so masters line
-    # up across a new year. Full timestamps never step back, so stay in year 0.
-    keyed: list[Keyed] = []
-    year = 0
-    later: str | None = None
-    for index in range(len(entries) - 1, -1, -1):
-        time = str(entries[index]["time"])
-        if later is not None and time > later:
-            year -= 1
-        later = time
-        keyed.append((year, time, master, index, entries[index]))
-    keyed.reverse()
-    return keyed
+    return entries
 
 
 async def _module_status(

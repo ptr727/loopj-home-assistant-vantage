@@ -38,7 +38,7 @@ get_trigger_history:
   name: Get trigger history
   description: >-
     Read the controller's trigger history: which object (button, timer, sensor)
-    started which task, newest entries last. Times are in controller local time.
+    started which task, newest entries last for each master. Times are in controller local time.
   fields:
     limit:
       name: Limit
@@ -52,7 +52,7 @@ get_trigger_history:
 
 get_system_log:
   name: Get system log
-  description: Read the controller's system log, newest entries last.
+  description: Read the controller's system log, newest entries last for each master.
   fields:
     limit:
       name: Limit
