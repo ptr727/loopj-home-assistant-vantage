@@ -106,11 +106,30 @@ async def _system_log(
     return _merge_by_time(per_master)
 
 
+type Keyed = tuple[int, str, int, int, dict[str, Any]]
+
+
 def _merge_by_time(per_master: list[list[dict[str, Any]]]) -> list[JsonValueType]:
-    # Each controller's list is already oldest first, so interleave them by time. A
-    # merge keeps each list's own order, which a sort would break for system log
-    # times, which carry no year.
-    return list(heapq.merge(*per_master, key=lambda entry: str(entry["time"])))
+    # Each master's list is already oldest first, so interleave them by time
+    keyed = [_year_keyed(entries, master) for master, entries in enumerate(per_master)]
+    return [entry for *_, entry in heapq.merge(*keyed)]
+
+
+def _year_keyed(entries: list[dict[str, Any]], master: int) -> list[Keyed]:
+    # System log times carry no year, eg. "12-31T23:59:00" then "01-01T00:01:00". Count
+    # years back from each master's newest entry, taken as this year, so masters line
+    # up across a new year. Full timestamps never step back, so stay in year 0.
+    keyed: list[Keyed] = []
+    year = 0
+    later: str | None = None
+    for index in range(len(entries) - 1, -1, -1):
+        time = str(entries[index]["time"])
+        if later is not None and time > later:
+            year -= 1
+        later = time
+        keyed.append((year, time, master, index, entries[index]))
+    keyed.reverse()
+    return keyed
 
 
 async def _module_status(
