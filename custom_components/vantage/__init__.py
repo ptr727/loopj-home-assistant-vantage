@@ -143,7 +143,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: VantageConfigEntry) -> 
     # Unload all platforms first, so nothing polls the client once it is closed
     unloaded = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
 
-    # Close the Vantage client connection
+    # Close the Vantage client connection, once no lookup can reopen it
+    entry.runtime_data.object_names.cancel()
     entry.runtime_data.client.close()
 
     return unloaded

@@ -34,6 +34,11 @@ class ObjectNames:
         """Forget looked up objects, eg. after the controller is reprogrammed."""
         self._cache.clear()
 
+    def cancel(self) -> None:
+        """Cancel lookups in flight, which callers shield, before the client closes."""
+        for pending in self._pending.values():
+            pending.cancel()
+
     async def path(self, vid: int) -> list[str]:
         """Return the names of an object and its parents, eg. sensor, module, enclosure."""
         names: list[str] = []
@@ -73,7 +78,8 @@ class ObjectNames:
             self._pending[vid] = pending
             pending.add_done_callback(lambda _: self._pending.pop(vid, None))
 
-        return await pending
+        # Shielded, so a cancelled caller doesn't cancel the lookup the others share
+        return await asyncio.shield(pending)
 
     async def _fetch(self, vid: int) -> ObjectInfo:
         try:
@@ -83,6 +89,13 @@ class ObjectNames:
         except ClientError as err:
             # Not cached, so the next lookup tries again
             LOGGER.debug("Failed to look up object %d: %s", vid, err)
+            return ObjectInfo(f"VID {vid}", None, None)
+        except Exception:
+            # aiovantage doesn't wrap decode or XML errors, which can also come from a
+            # reply left over after a timeout, so retry next time as for a ClientError
+            LOGGER.warning(
+                "Failed to read object %d, naming it by VID", vid, exc_info=True
+            )
             return ObjectInfo(f"VID {vid}", None, None)
 
         info = _object_info(vid, objects[0].obj if objects else None)

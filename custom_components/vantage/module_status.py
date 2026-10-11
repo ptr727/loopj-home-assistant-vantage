@@ -27,6 +27,9 @@ class ModuleStatus:
     enclosures: set[int] = field(default_factory=set[int])
     """VIDs of the enclosures whose bus was read."""
 
+    failed: dict[int, str] = field(default_factory=dict[int, str])
+    """Enclosures whose bus couldn't be read, keyed by VID, with the error."""
+
     def is_online(self, module: SystemObject) -> bool | None:
         """Return whether a module responds, or None if its bus couldn't be read."""
         if enclosure_vid(module) not in self.enclosures:
@@ -56,6 +59,7 @@ async def read_module_status(entry: VantageConfigEntry) -> ModuleStatus:
         number = (await names.info(vid)).position
         if number is None:
             LOGGER.debug("Enclosure %d has no position, skipping", vid)
+            status.failed[vid] = "Enclosure position could not be read"
             continue
 
         # Read each enclosure separately, so one failure doesn't hide the others
@@ -64,15 +68,14 @@ async def read_module_status(entry: VantageConfigEntry) -> ModuleStatus:
             found = await DiagnosticInterface.get_modules(
                 vantage.config_client, number, master=address
             )
-        except ClientError as err:
+        except Exception as err:
+            # aiovantage can also raise decode or XML errors that aren't a ClientError
             LOGGER.debug("Failed to read modules in enclosure %d: %s", vid, err)
+            status.failed[vid] = str(err) or type(err).__name__
             continue
 
         status.enclosures.add(vid)
         status.modules |= {info.vid: info for info in found if info.vid is not None}
-
-    if enclosures and not status.enclosures:
-        raise ClientError("No enclosure could be read")
 
     return status
 
@@ -97,6 +100,12 @@ class ModuleStatusCoordinator(DataUpdateCoordinator[ModuleStatus]):
 
     async def _async_update_data(self) -> ModuleStatus:
         try:
-            return await read_module_status(self.config_entry)
+            status = await read_module_status(self.config_entry)
         except ClientError as err:
             raise UpdateFailed(f"Failed to read module status: {err}") from err
+
+        # Fail the update, as before, when no enclosure could be read at all
+        if status.failed and not status.enclosures:
+            raise UpdateFailed(f"No enclosure could be read: {status.failed}")
+
+        return status
