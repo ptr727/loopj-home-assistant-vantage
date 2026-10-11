@@ -4,7 +4,7 @@ from collections.abc import Awaitable, Callable, Coroutine
 from typing import Any
 
 from aiovantage.config_client import DiagnosticInterface, SysLogType
-from aiovantage.errors import ClientError
+from aiovantage.errors import ClientError, ClientResponseError
 import voluptuous as vol
 
 from homeassistant.config_entries import ConfigEntryState
@@ -60,23 +60,29 @@ def _read_failed(
     entry: VantageConfigEntry,
     masters: list[int | None],
     index: int,
-    err: Exception,
+    err: ClientError,
     errors: list[JsonValueType],
-) -> None:
-    """Record a master that couldn't be read, and each master after it as unread."""
+) -> bool:
+    """Record a master that couldn't be read, and return whether to read the next."""
     errors.append(_master_error(entry, masters[index], _error_text(err)))
 
-    # Peers are read through the connected master's connection, and a failed read can
-    # leave it out of step, so the remaining masters are not read
+    # A peer's error answer is read in full before it is reported, so the shared
+    # connection stays in step and the next peer can be read
+    if masters[index] is not None and isinstance(err, ClientResponseError):
+        return True
+
+    # Peers are read through the connected master's connection, which a connection
+    # error or timeout leaves unusable or out of step, so the rest are not read
     failed = masters[index] or entry.runtime_data.client.master_number
     errors.extend(
         _master_error(entry, master, f"Not read after master {failed} failed")
         for master in masters[index + 1 :]
     )
+    return False
 
 
 def _error_text(err: Exception) -> str:
-    # A read timeout carries no message
+    # A read timeout or a dropped connection carries no message
     return str(err) or type(err).__name__
 
 
@@ -94,7 +100,8 @@ async def _trigger_history(
                 vantage.config_client, master=master
             )
         except ClientError as err:
-            _read_failed(entry, masters, index, err, errors)
+            if _read_failed(entry, masters, index, err, errors):
+                continue
             break
 
         for item in log[-call.data[ATTR_LIMIT] :]:
@@ -132,7 +139,8 @@ async def _system_log(
                 vantage.config_client, master=master
             )
         except ClientError as err:
-            _read_failed(entry, masters, index, err, errors)
+            if _read_failed(entry, masters, index, err, errors):
+                continue
             break
 
         entries.extend(
