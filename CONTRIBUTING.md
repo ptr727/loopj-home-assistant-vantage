@@ -46,6 +46,9 @@ python3 -m venv .venv
 # Activate the virtual environment
 source .venv/bin/activate
 
+# Install the unreleased aiovantage the integration needs, which pip cannot find on PyPI
+pip install "aiovantage @ git+https://github.com/ptr727/loopj-aiovantage.git@6a00c5cfddb46bcd67312385cc944f8ef926dc3a"
+
 # Install development dependencies
 pip install -e ".[dev]"
 ```
