@@ -97,7 +97,7 @@ Vantage *Blind*, *BlindGroup*, *QISBlind*, *QubeBlind*, *RelayBlind*, *Somfy.RS-
 
 Vantage *DryContact* objects (motion sensors, etc) will appear as binary sensors in Home Assistant.
 
-Each Vantage module (eg. SDM12, UDM08) also gets a diagnostic *connectivity* binary sensor, which turns off when the module stops responding on its enclosure bus, for example when the breaker feeding it trips. Its `errors` attribute is the controller's error count for the module, which rises each time the module drops off the bus.
+Each Vantage module (eg. SDM12, UDM08) also gets a diagnostic *Connectivity* binary sensor, eg. `binary_sensor.module_2_connectivity`, which turns off when the module stops responding on its enclosure bus, for example when the breaker feeding it trips. It is checked every 30 seconds, and at once when the controller logs a module going offline or online. Its `address` attribute is the module's position on the bus, and its `errors` attribute is the controller's error count for the module, which rises each time the module drops off the bus.
 
 ### Sensors
 
@@ -203,6 +203,7 @@ The following is an example of the payload for a power sensor going out of range
 
 ```json
 {
+    "host": "192.0.2.10",
     "trigger_type": "out_of_range",
     "event": 7,
     "source_id": 120,
@@ -217,6 +218,7 @@ The following is an example of the payload for a power sensor going out of range
 
 | Attribute | Description |
 | --- | --- |
+| `host` | The host of the controller that reported the trigger. |
 | `trigger_type` | The type of trigger, eg. `button_down`, `button_up`, `button_hold`, `timer`, `in_range`, `out_of_range`, or `module_alert`. |
 | `event` | The controller's numeric code for the trigger type. |
 | `source_id` | The Vantage ID of the object that triggered the task. |
@@ -233,16 +235,18 @@ This event is fired for notable entries in the controller's system log: warnings
 
 ```json
 {
+    "host": "192.0.2.10",
     "type": "warning",
     "source": "Controller",
-    "message": "[ALERT] Module 'Module 2' (VID:120) detected missing line feed 1",
-    "object_id": 120,
+    "message": "[ALERT] Module 'Module 2' (VID:110) detected missing line feed 1",
+    "object_id": 110,
     "object_name": "Module 2"
 }
 ```
 
 | Attribute | Description |
 | --- | --- |
+| `host` | The host of the controller that logged the entry. |
 | `type` | The log type, eg. `information`, `warning`, `error`. |
 | `source` | The source of the log, eg. `Controller`. |
 | `message` | The log message. |
@@ -263,7 +267,7 @@ You can stop a Vantage task by calling the `vantage.stop_task` service, with eit
 
 ### `vantage.get_trigger_history`
 
-Returns the controller's trigger history, the same entries InFusion Diagnostics shows in its History view, oldest first. Each entry has the same attributes as the `vantage_trigger` event, plus the `time` it was recorded, in the controller's local time. The optional `limit` caps the number of entries returned per controller, newest kept, and defaults to 100.
+Returns the controller's trigger history, the same entries InFusion Diagnostics shows in its History view, oldest first. Each entry has the same attributes as the `vantage_trigger` event, plus the `time` it was recorded, in the controller's local time, and the `master` that recorded it. The optional `limit` caps the number of entries returned per controller, newest kept, and defaults to 100.
 
 ### `vantage.get_system_log`
 
@@ -271,4 +275,6 @@ Returns the controller's system log, the same entries InFusion Diagnostics shows
 
 ### `vantage.get_module_status`
 
-Returns the modules that respond on each controller's enclosure bus, with their address, model, firmware version, status bytes and error count.
+Returns each module known to the controllers, with `online` set to whether it responds on its enclosure bus (or null if its enclosure couldn't be read), and the address, model, firmware version, status bytes and error count of those that respond.
+
+Each of these services returns an `errors` list naming any controller that couldn't be read, and fails only when none could.

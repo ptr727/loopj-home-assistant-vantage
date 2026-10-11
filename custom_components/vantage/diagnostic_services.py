@@ -24,6 +24,7 @@ from .const import (
     SERVICE_GET_SYSTEM_LOG,
     SERVICE_GET_TRIGGER_HISTORY,
 )
+from .module_status import read_module_status
 from .triggers import describe_trigger
 
 ATTR_LIMIT = "limit"
@@ -37,24 +38,39 @@ type EntryReader = Callable[
 ]
 
 
+def _masters(entry: VantageConfigEntry) -> list[int | None]:
+    # None addresses the connected master, then each peer in a multi-master system
+    return [None, *entry.runtime_data.client.peers]
+
+
 async def _trigger_history(
     entry: VantageConfigEntry, call: ServiceCall
 ) -> list[JsonValueType]:
     vantage = entry.runtime_data.client
-    log = await DiagnosticInterface.get_event_log(vantage.config_client)
 
     entries: list[JsonValueType] = []
-    for item in log[-call.data[ATTR_LIMIT] :]:
-        described = await describe_trigger(
-            entry.runtime_data.object_names,
-            item.source or 0,
-            item.destination or 0,
-            item.event,
-            item.param1,
-            item.param2,
+    for master in _masters(entry):
+        log = await DiagnosticInterface.get_event_log(
+            vantage.config_client, master=master
         )
-        # Times are in the controller's local time
-        entries.append({"time": item.time_stamp, "host": vantage.host} | described)
+        for item in log[-call.data[ATTR_LIMIT] :]:
+            described = await describe_trigger(
+                entry.runtime_data.object_names,
+                item.source or 0,
+                item.destination or 0,
+                item.event,
+                item.param1,
+                item.param2,
+            )
+            # Times are in the controller's local time
+            entries.append(
+                {
+                    "time": item.time_stamp,
+                    "host": vantage.host,
+                    "master": master or vantage.master_number,
+                }
+                | described
+            )
 
     return entries
 
@@ -63,42 +79,51 @@ async def _system_log(
     entry: VantageConfigEntry, call: ServiceCall
 ) -> list[JsonValueType]:
     vantage = entry.runtime_data.client
-    log = await DiagnosticInterface.get_sys_log(vantage.config_client)
 
-    return [
-        {
-            # Month, day and time in the controller's local time, eg. "10-06T06:51:15"
-            "time": item.time,
-            "host": vantage.host,
-            "type": _sys_log_type_name(item.log_type, item.type),
-            "source": item.src,
-            "message": (item.msg or "").strip(),
-        }
-        for item in log[-call.data[ATTR_LIMIT] :]
-    ]
+    entries: list[JsonValueType] = []
+    for master in _masters(entry):
+        log = await DiagnosticInterface.get_sys_log(
+            vantage.config_client, master=master
+        )
+        entries.extend(
+            {
+                # Month, day and time in the controller's local time, eg. "01-02T03:04:05"
+                "time": item.time,
+                "host": vantage.host,
+                "master": master or vantage.master_number,
+                "type": _sys_log_type_name(item.log_type, item.type),
+                "source": item.src,
+                "message": (item.msg or "").strip(),
+            }
+            for item in log[-call.data[ATTR_LIMIT] :]
+        )
+
+    return entries
 
 
 async def _module_status(
     entry: VantageConfigEntry, call: ServiceCall
 ) -> list[JsonValueType]:
     vantage = entry.runtime_data.client
-    found = await DiagnosticInterface.get_modules(vantage.config_client)
+    status = await read_module_status(entry)
 
     modules: list[JsonValueType] = []
-    for module in found:
-        status = module.status
+    for module in vantage.modules:
+        info = status.modules.get(module.vid)
         modules.append(
             {
                 "host": vantage.host,
                 "module_id": module.vid,
-                "module_name": await entry.runtime_data.object_names.name(
-                    module.vid or 0
-                ),
-                "address": module.address,
-                "model": module.model,
-                "version": module.version,
-                "status": [status.proc0, status.proc1] if status else None,
-                "errors": module.errors,
+                "module_name": module.name,
+                # None when the module's enclosure couldn't be read
+                "online": status.is_online(module),
+                "address": info.address if info else None,
+                "model": info.model if info else None,
+                "version": info.version if info else None,
+                "status": [info.status.proc0, info.status.proc1]
+                if info and info.status
+                else None,
+                "errors": info.errors if info else None,
             }
         )
 
@@ -117,15 +142,22 @@ def async_register_diagnostic_services(hass: HomeAssistant) -> None:
     ) -> Callable[[ServiceCall], Coroutine[Any, Any, ServiceResponse]]:
         async def handler(call: ServiceCall) -> ServiceResponse:
             items: list[JsonValueType] = []
+            errors: list[JsonValueType] = []
             for entry in hass.config_entries.async_entries(DOMAIN):
                 if entry.state is not ConfigEntryState.LOADED:
                     continue
                 try:
                     items.extend(await read(entry, call))
                 except ClientError as err:
-                    raise HomeAssistantError(f"Failed to read {what}: {err}") from err
+                    errors.append(
+                        {"host": entry.runtime_data.client.host, "error": str(err)}
+                    )
 
-            return {key: items}
+            # Report what could be read, and only fail when nothing could
+            if errors and not items:
+                raise HomeAssistantError(f"Failed to read {what}: {errors}")
+
+            return {key: items, "errors": errors}
 
         return handler
 

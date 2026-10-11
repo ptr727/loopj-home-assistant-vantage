@@ -1,6 +1,7 @@
 """Resolve Vantage object names, including objects the integration doesn't load."""
 
-from typing import Any
+import asyncio
+from typing import Any, NamedTuple
 
 from aiovantage import Vantage
 from aiovantage.config_client import ConfigurationInterface
@@ -12,13 +13,26 @@ from .const import LOGGER
 MAX_PATH_DEPTH = 8
 
 
+class ObjectInfo(NamedTuple):
+    """The name of an object, and where it sits under its parent."""
+
+    name: str
+    parent: int | None
+    position: int | None
+
+
 class ObjectNames:
     """Resolve object names and parent chains, including objects not loaded."""
 
     def __init__(self, vantage: Vantage) -> None:
         """Initialize the resolver."""
         self._vantage = vantage
-        self._cache: dict[int, tuple[str, int | None]] = {}
+        self._cache: dict[int, ObjectInfo] = {}
+        self._pending: dict[int, asyncio.Task[ObjectInfo]] = {}
+
+    def clear(self) -> None:
+        """Forget looked up objects, eg. after the controller is reprogrammed."""
+        self._cache.clear()
 
     async def path(self, vid: int) -> list[str]:
         """Return the names of an object and its parents, eg. sensor, module, enclosure."""
@@ -27,48 +41,74 @@ class ObjectNames:
         current: int | None = vid
         while current and current not in seen and len(names) < MAX_PATH_DEPTH:
             seen.add(current)
-            name, current = await self._lookup(current)
-            names.append(name)
+            info = await self.info(current)
+            names.append(info.name)
+            current = info.parent
 
         return names
 
     async def name(self, vid: int) -> str:
         """Return the name of an object."""
-        return (await self._lookup(vid))[0]
+        return (await self.info(vid)).name
 
-    async def _lookup(self, vid: int) -> tuple[str, int | None]:
+    async def info(self, vid: int) -> ObjectInfo:
+        """Return the name, parent and position of an object."""
         # Objects the integration loaded, eg. buttons, sensors, modules and tasks
         if vid in self._vantage:
             obj = self._vantage[vid]
             parent = getattr(obj, "parent", None)
-            return obj.name or f"VID {vid}", getattr(parent, "vid", None)
-
-        # Other objects, eg. timers and enclosures, fetched once and cached
-        if vid not in self._cache:
-            try:
-                objects = await ConfigurationInterface.get_object(
-                    self._vantage.config_client, vid
-                )
-            except ClientError as err:
-                LOGGER.debug("Failed to look up object %d: %s", vid, err)
-                return f"VID {vid}", None
-
-            self._cache[vid] = _name_and_parent(
-                vid, objects[0].obj if objects else None
+            return ObjectInfo(
+                obj.name or f"VID {vid}",
+                getattr(parent, "vid", None),
+                getattr(parent, "position", None),
             )
 
-        return self._cache[vid]
+        # Other objects, eg. timers and enclosures, fetched once and cached
+        if (info := self._cache.get(vid)) is not None:
+            return info
+
+        # Share a lookup already in flight rather than asking the controller again
+        if (pending := self._pending.get(vid)) is None:
+            pending = asyncio.ensure_future(self._fetch(vid))
+            self._pending[vid] = pending
+            pending.add_done_callback(lambda _: self._pending.pop(vid, None))
+
+        return await pending
+
+    async def _fetch(self, vid: int) -> ObjectInfo:
+        try:
+            objects = await ConfigurationInterface.get_object(
+                self._vantage.config_client, vid
+            )
+        except ClientError as err:
+            # Not cached, so the next lookup tries again
+            LOGGER.debug("Failed to look up object %d: %s", vid, err)
+            return ObjectInfo(f"VID {vid}", None, None)
+
+        info = _object_info(vid, objects[0].obj if objects else None)
+        self._cache[vid] = info
+        return info
 
 
-def _name_and_parent(vid: int, obj: Any) -> tuple[str, int | None]:
+def _object_info(vid: int, obj: Any) -> ObjectInfo:
     # Types aiovantage doesn't model come back as generic elements
     if hasattr(obj, "children"):
-        fields = {child.qname: child.text for child in obj.children}
-        parent = fields.get("Parent")
-        return (
-            fields.get("Name") or f"VID {vid}",
-            int(parent) if parent and parent.strip().isdigit() else None,
+        children = {child.qname: child for child in obj.children}
+        name = getattr(children.get("Name"), "text", None)
+        parent = children.get("Parent")
+        return ObjectInfo(
+            name or f"VID {vid}",
+            _int(getattr(parent, "text", None)),
+            _int(getattr(parent, "attributes", {}).get("Position")),
         )
 
     parent = getattr(obj, "parent", None)
-    return getattr(obj, "name", None) or f"VID {vid}", getattr(parent, "vid", None)
+    return ObjectInfo(
+        getattr(obj, "name", None) or f"VID {vid}",
+        getattr(parent, "vid", None),
+        getattr(parent, "position", None),
+    )
+
+
+def _int(value: str | None) -> int | None:
+    return int(value) if value and value.strip().isdigit() else None

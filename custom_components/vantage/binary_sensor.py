@@ -2,7 +2,6 @@
 
 from typing import Any, override
 
-from aiovantage.config_client import ModuleInfo
 from aiovantage.controllers import Controller
 from aiovantage.objects import DryContact, SystemObject
 
@@ -16,7 +15,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .config_entry import VantageConfigEntry
 from .entity import VantageEntity, add_entities_from_controller
-from .module_status import ModuleStatusCoordinator
+from .module_status import ModuleStatus, ModuleStatusCoordinator
 
 
 async def async_setup_entry(
@@ -72,9 +71,6 @@ class VantageModuleConnectivityEntity(VantageEntity[SystemObject], BinarySensorE
     _attr_device_class = BinarySensorDeviceClass.CONNECTIVITY
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
-    # Name the entity from the connectivity device class ("Connectivity")
-    _attr_translation_key = None
-
     @property
     def coordinator(self) -> ModuleStatusCoordinator | None:
         """Return the module status coordinator."""
@@ -84,6 +80,12 @@ class VantageModuleConnectivityEntity(VantageEntity[SystemObject], BinarySensorE
     @override
     def unique_id(self) -> str:
         return f"{self.obj.vid}:connectivity"
+
+    @property
+    @override
+    def name(self) -> str | None:
+        # The module's device is named after the module, so this reads "<module> Connectivity"
+        return "Connectivity"
 
     @property
     @override
@@ -98,28 +100,29 @@ class VantageModuleConnectivityEntity(VantageEntity[SystemObject], BinarySensorE
     @property
     @override
     def is_on(self) -> bool | None:
-        if (data := self._module_data()) is None:
+        if (status := self._module_status()) is None:
             return None
 
-        return self.obj.vid in data
+        # None when the module's enclosure couldn't be read
+        return status.is_online(self.obj)
 
     @property
     @override
     def extra_state_attributes(self) -> dict[str, Any] | None:
-        data = self._module_data()
-        if data is None or (info := data.get(self.obj.vid)) is None:
+        status = self._module_status()
+        if status is None or (info := status.modules.get(self.obj.vid)) is None:
             return None
 
         # The error count rises each time the module loses and regains the bus
         return {"address": info.address, "errors": info.errors}
 
-    def _module_data(self) -> dict[int, ModuleInfo] | None:
+    def _module_status(self) -> ModuleStatus | None:
         # Unset until the first successful refresh, despite the coordinator's typing
         if (coordinator := self.coordinator) is None:
             return None
 
-        data: dict[int, ModuleInfo] | None = coordinator.data
-        return data
+        status: ModuleStatus | None = coordinator.data
+        return status
 
     @override
     async def async_added_to_hass(self) -> None:

@@ -1,5 +1,6 @@
 """Forward Vantage triggers, the object that started each task, to the event bus."""
 
+import asyncio
 from typing import Any
 
 from aiovantage.config_client import TriggerType
@@ -46,29 +47,31 @@ async def describe_trigger(
 async def async_setup_triggers(hass: HomeAssistant, entry: VantageConfigEntry) -> None:
     """Fire an event each time an object triggers a task."""
     vantage = entry.runtime_data.client
+    names = entry.runtime_data.object_names
 
     # Triggers are only reported through the enhanced log
     conn = await vantage.event_stream.start()
     if not conn.supports_enhanced_log:
         LOGGER.info("Controller firmware does not report triggers")
         return
-    names = entry.runtime_data.object_names
 
-    async def fire(trigger: TriggerReceived) -> None:
-        payload = await describe_trigger(
-            names,
-            trigger.source,
-            trigger.destination,
-            trigger.event,
-            trigger.param1,
-            trigger.param2,
-        )
-        hass.bus.async_fire(EVENT_TRIGGER, payload)
+    # Fire in the order the controller reported, though some names need a lookup
+    queue: asyncio.Queue[TriggerReceived] = asyncio.Queue()
 
-    def on_trigger(trigger: TriggerReceived) -> None:
-        # Names of objects that aren't loaded may need a lookup on the controller
-        entry.async_create_background_task(hass, fire(trigger), "vantage_trigger")
+    async def fire_in_order() -> None:
+        while True:
+            trigger = await queue.get()
+            payload = await describe_trigger(
+                names,
+                trigger.source,
+                trigger.destination,
+                trigger.event,
+                trigger.param1,
+                trigger.param2,
+            )
+            hass.bus.async_fire(EVENT_TRIGGER, {"host": vantage.host} | payload)
 
+    entry.async_create_background_task(hass, fire_in_order(), "vantage_triggers")
     entry.async_on_unload(
-        vantage.event_stream.subscribe_triggers(on_trigger, peers=vantage.peers)
+        vantage.event_stream.subscribe_triggers(queue.put_nowait, peers=vantage.peers)
     )

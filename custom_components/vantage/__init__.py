@@ -68,6 +68,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: VantageConfigEntry) -> b
         # Add Vantage devices (controllers, modules, stations) to the device registry
         await async_setup_devices(hass, entry)
 
+        # Generate events naming the object that started each task, and for notable
+        # system logs, eg. a module losing power. Subscribed before the platforms are
+        # set up, so a connection failure here can retry setup from scratch.
+        await async_setup_triggers(hass, entry)
+        await async_setup_system_log(hass, entry)
+
         # Set up each platform (lights, covers, etc.)
         await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
@@ -76,12 +82,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: VantageConfigEntry) -> b
 
         # Generate events for button presses, etc.
         async_setup_events(hass, entry)
-
-        # Generate events naming the object that started each task
-        await async_setup_triggers(hass, entry)
-
-        # Generate events for notable system logs, eg. a module losing power
-        await async_setup_system_log(hass, entry)
 
         # Clean up any orphaned devices and entities
         async_cleanup_devices(hass, entry)
@@ -103,6 +103,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: VantageConfigEntry) -> b
                 # controllers to avoid fetching incomplete data.
                 await asyncio.sleep(SYSTEM_PROGRAMMING_DELAY)
                 await vantage.initialize()
+
+                # Names of objects the integration doesn't load may have changed too
+                entry.runtime_data.object_names.clear()
 
             hass.async_create_task(refresh_controllers())
 
@@ -137,8 +140,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: VantageConfigEntry) -> b
 
 async def async_unload_entry(hass: HomeAssistant, entry: VantageConfigEntry) -> bool:
     """Unload a config entry."""
+    # Unload all platforms first, so nothing polls the client once it is closed
+    unloaded = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+
     # Close the Vantage client connection
     entry.runtime_data.client.close()
 
-    # Unload all platforms
-    return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+    return unloaded
