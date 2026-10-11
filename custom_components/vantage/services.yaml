@@ -42,7 +42,7 @@ get_trigger_history:
   fields:
     limit:
       name: Limit
-      description: The maximum number of entries to return, per controller.
+      description: The maximum number of entries to return, per master.
       default: 100
       selector:
         number:
@@ -56,7 +56,7 @@ get_system_log:
   fields:
     limit:
       name: Limit
-      description: The maximum number of entries to return, per controller.
+      description: The maximum number of entries to return, per master.
       default: 100
       selector:
         number:
