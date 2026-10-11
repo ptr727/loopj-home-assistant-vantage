@@ -24,7 +24,7 @@ OBJECT_VID = re.compile(r"\(VID:(\d+)\)|\[(\d+)\]")
 
 # A program write compiles the controller's scripts, and their warnings are not faults
 COMPILER_SOURCE = "Compiler"
-SCRIPT_COMPILED = re.compile(r"^\S+ compiled with warnings\b")
+SCRIPT_COMPILED = re.compile(r" compiled with warnings in [\d.]+ seconds\.?$")
 
 # A warning can repeat in a burst of one shape, as a program write does while stations
 # and objects reload, eg. "Station bus command (1040) not processed on station 3 (84)".
@@ -49,10 +49,11 @@ def is_noise(
         return False
     if log.message.startswith("[ALERT]") or MODULE_LOG.match(log.message):
         return False
-    if log.source == COMPILER_SOURCE or SCRIPT_COMPILED.match(log.message):
+    if log.source == COMPILER_SOURCE or SCRIPT_COMPILED.search(log.message):
         return True
 
-    # The shape ignores numbers but keeps the object, so two objects never collapse
+    # The shape ignores numbers but keeps a VID the message names, so warnings about two
+    # VIDs stay apart, while a burst over numbered stations or commands collapses
     vid = OBJECT_VID.search(log.message)
     shape = (log.source, NUMBER.sub("N", log.message), vid.group(0) if vid else None)
     last_seen, last_passed = seen.get(shape, (None, None))

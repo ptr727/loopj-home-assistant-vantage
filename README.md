@@ -233,7 +233,7 @@ The following is an example of the payload for a power sensor going out of range
 
 This event is fired for notable entries in the controller's system log: warnings, errors, and modules going offline or coming back online. Each one is also shown in the logbook.
 
-Writing a program to the controller logs about a hundred warnings, so two kinds are left out. Script compiler warnings are dropped, though compiler errors are kept. A warning that repeats with the same wording and object within a minute fires once, and again every hour while the repeats continue. `[ALERT]` warnings and module messages always fire. The following is an example of the payload:
+Writing a program to the controller logs about a hundred warnings, so two kinds are left out. Script compiler warnings are dropped, though compiler errors are kept. A warning that repeats within a minute with the same wording, apart from its numbers, fires once, and again every hour while the repeats continue. A warning naming a different object by its Vantage ID is not a repeat. `[ALERT]` warnings and module messages always fire. The following is an example of the payload:
 
 ```json
 {
