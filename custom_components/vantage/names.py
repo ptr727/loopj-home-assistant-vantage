@@ -34,6 +34,11 @@ class ObjectNames:
         """Forget looked up objects, eg. after the controller is reprogrammed."""
         self._cache.clear()
 
+    def cancel(self) -> None:
+        """Cancel lookups in flight, which callers shield, before the client closes."""
+        for pending in self._pending.values():
+            pending.cancel()
+
     async def path(self, vid: int) -> list[str]:
         """Return the names of an object and its parents, eg. sensor, module, enclosure."""
         names: list[str] = []
@@ -86,14 +91,12 @@ class ObjectNames:
             LOGGER.debug("Failed to look up object %d: %s", vid, err)
             return ObjectInfo(f"VID {vid}", None, None)
         except Exception:
-            # A decode or XML error, which aiovantage doesn't wrap, would repeat, so
-            # cache the fallback rather than ask the controller again each time
+            # aiovantage doesn't wrap decode or XML errors, which can also come from a
+            # reply left over after a timeout, so retry next time as for a ClientError
             LOGGER.warning(
                 "Failed to read object %d, naming it by VID", vid, exc_info=True
             )
-            info = ObjectInfo(f"VID {vid}", None, None)
-            self._cache[vid] = info
-            return info
+            return ObjectInfo(f"VID {vid}", None, None)
 
         info = _object_info(vid, objects[0].obj if objects else None)
         self._cache[vid] = info
