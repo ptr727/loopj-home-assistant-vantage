@@ -17,7 +17,7 @@
     "custom_components.vantage"
   ],
   "requirements": [
-    "aiovantage==0.23.2"
+    "git+https://github.com/ptr727/loopj-aiovantage.git@6a00c5cfddb46bcd67312385cc944f8ef926dc3a#aiovantage==0.24.0.dev1"
   ],
   "version": "0.15.2",
   "zeroconf": [
