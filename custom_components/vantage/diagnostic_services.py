@@ -4,7 +4,7 @@ from collections.abc import Awaitable, Callable, Coroutine
 from typing import Any
 
 from aiovantage.config_client import DiagnosticInterface, SysLogType
-from aiovantage.errors import ClientError
+from aiovantage.errors import ClientError, CommandError
 import voluptuous as vol
 
 from homeassistant.config_entries import ConfigEntryState
@@ -46,14 +46,38 @@ def _masters(entry: VantageConfigEntry) -> list[int | None]:
 
 
 def _master_error(
-    entry: VantageConfigEntry, master: int | None, err: ClientError
+    entry: VantageConfigEntry, master: int | None, error: str
 ) -> JsonValueType:
     vantage = entry.runtime_data.client
     return {
         "host": vantage.host,
         "master": master or vantage.master_number,
-        "error": str(err),
+        "error": error,
     }
+
+
+def _read_failed(
+    entry: VantageConfigEntry,
+    masters: list[int | None],
+    index: int,
+    err: Exception,
+    errors: list[JsonValueType],
+) -> bool:
+    """Record a master that couldn't be read, and return whether to read the next."""
+    errors.append(_master_error(entry, masters[index], str(err) or type(err).__name__))
+
+    # A peer that answered with an error leaves the connection in step. Peers are read
+    # through the connected master, so after it fails, or after a timeout or a broken
+    # connection, which can leave a late answer to be read as the next master's, stop.
+    if masters[index] is not None and isinstance(err, CommandError):
+        return True
+
+    failed = masters[index] or entry.runtime_data.client.master_number
+    errors.extend(
+        _master_error(entry, master, f"Not read after master {failed} failed")
+        for master in masters[index + 1 :]
+    )
+    return False
 
 
 async def _trigger_history(
@@ -62,18 +86,17 @@ async def _trigger_history(
     vantage = entry.runtime_data.client
 
     entries: list[JsonValueType] = []
-    for master in _masters(entry):
+    masters = _masters(entry)
+    for index, master in enumerate(masters):
         # Keep what the other masters returned when one can't be read
         try:
             log = await DiagnosticInterface.get_event_log(
                 vantage.config_client, master=master
             )
-        except ClientError as err:
-            errors.append(_master_error(entry, master, err))
-            # Peers are read through the connected master, so they would fail too
-            if master is None:
-                break
-            continue
+        except (ClientError, TimeoutError) as err:
+            if _read_failed(entry, masters, index, err, errors):
+                continue
+            break
 
         for item in log[-call.data[ATTR_LIMIT] :]:
             described = await describe_trigger(
@@ -103,17 +126,16 @@ async def _system_log(
     vantage = entry.runtime_data.client
 
     entries: list[JsonValueType] = []
-    for master in _masters(entry):
+    masters = _masters(entry)
+    for index, master in enumerate(masters):
         try:
             log = await DiagnosticInterface.get_sys_log(
                 vantage.config_client, master=master
             )
-        except ClientError as err:
-            errors.append(_master_error(entry, master, err))
-            # Peers are read through the connected master, so they would fail too
-            if master is None:
-                break
-            continue
+        except (ClientError, TimeoutError) as err:
+            if _read_failed(entry, masters, index, err, errors):
+                continue
+            break
 
         entries.extend(
             {
@@ -178,7 +200,7 @@ def async_register_diagnostic_services(hass: HomeAssistant) -> None:
                     continue
                 try:
                     items.extend(await read(entry, call, errors))
-                except ClientError as err:
+                except (ClientError, TimeoutError) as err:
                     errors.append(
                         {"host": entry.runtime_data.client.host, "error": str(err)}
                     )
