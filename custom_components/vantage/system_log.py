@@ -2,6 +2,7 @@
 
 import asyncio
 import re
+import time
 
 from aiovantage.config_client import SysLogType
 from aiovantage.events import SystemLogReceived
@@ -21,10 +22,36 @@ MODULE_BUS_CHANGE = re.compile(r"^Module (Offline|Online)\b")
 # The object a log is about, eg. "(VID:120)" or "[120]"
 OBJECT_VID = re.compile(r"\(VID:(\d+)\)|\[(\d+)\]")
 
+# A program write compiles the controller's scripts, and their warnings are not faults
+COMPILE_SOURCES = {"Compiler", "ScriptEngine"}
+
+# A program write also logs a burst of warnings of one shape as stations and objects
+# reload, eg. "Station bus command (1040) not processed on station 3 (84)"
+REPEAT_WINDOW = 60.0
+NUMBER = re.compile(r"\d+")
+
 
 def is_notable(log: SystemLogReceived) -> bool:
     """Return whether a system log is worth an event."""
     return log.type in NOTABLE_TYPES or bool(MODULE_LOG.match(log.message))
+
+
+def is_noise(
+    log: SystemLogReceived, last_seen: dict[tuple[str, str], float], now: float
+) -> bool:
+    """Return whether a notable warning is program-write noise rather than a fault."""
+    if log.type != SysLogType.WARNING:
+        return False
+    if log.source in COMPILE_SOURCES:
+        return True
+    if log.message.startswith("[ALERT]") or MODULE_LOG.match(log.message):
+        return False
+
+    # Pass the first warning of a shape, and drop repeats until it has been quiet
+    shape = (log.source, NUMBER.sub("N", log.message))
+    last = last_seen.get(shape)
+    last_seen[shape] = now
+    return last is not None and now - last < REPEAT_WINDOW
 
 
 async def async_setup_system_log(
@@ -42,6 +69,7 @@ async def async_setup_system_log(
 
     # Fire in the order the controller logged, though some names need a lookup
     queue: asyncio.Queue[SystemLogReceived] = asyncio.Queue()
+    last_seen: dict[tuple[str, str], float] = {}
 
     async def fire_in_order() -> None:
         while True:
@@ -68,6 +96,9 @@ async def async_setup_system_log(
             entry.async_create_background_task(
                 hass, coordinator.async_request_refresh(), "vantage_module_status"
             )
+
+        if is_noise(log, last_seen, time.monotonic()):
+            return
 
         queue.put_nowait(log)
 
