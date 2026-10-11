@@ -33,7 +33,7 @@ REPEAT_WINDOW = 60.0
 REPEAT_REMINDER = 3600.0
 NUMBER = re.compile(r"\d+")
 
-type Shape = tuple[str, str, str | None]
+type Shape = tuple[str, str, tuple[str, ...]]
 
 
 def is_notable(log: SystemLogReceived) -> bool:
@@ -52,10 +52,10 @@ def is_noise(
     if log.source == COMPILER_SOURCE or SCRIPT_COMPILED.search(log.message):
         return True
 
-    # The shape ignores numbers but keeps a VID the message names, so warnings about two
-    # VIDs stay apart, while a burst over numbered stations or commands collapses
-    vid = OBJECT_VID.search(log.message)
-    shape = (log.source, NUMBER.sub("N", log.message), vid.group(0) if vid else None)
+    # The shape ignores numbers but keeps every VID the message names, so warnings about
+    # different VIDs stay apart, while a burst over numbered stations or commands collapses
+    vids = tuple(match.group(0) for match in OBJECT_VID.finditer(log.message))
+    shape = (log.source, NUMBER.sub("N", log.message), vids)
     last_seen, last_passed = seen.get(shape, (None, None))
     if (
         last_seen is not None
