@@ -5,6 +5,7 @@ from typing import Any, NamedTuple
 
 from aiovantage import Vantage
 from aiovantage.config_client import ConfigurationInterface
+from aiovantage.errors import ClientError
 
 from .const import LOGGER
 
@@ -72,18 +73,27 @@ class ObjectNames:
             self._pending[vid] = pending
             pending.add_done_callback(lambda _: self._pending.pop(vid, None))
 
-        return await pending
+        # Shielded, so a cancelled caller doesn't cancel the lookup the others share
+        return await asyncio.shield(pending)
 
     async def _fetch(self, vid: int) -> ObjectInfo:
         try:
             objects = await ConfigurationInterface.get_object(
                 self._vantage.config_client, vid
             )
-        except Exception as err:
-            # aiovantage can also raise decode, XML or buffer errors that aren't a
-            # ClientError. Not cached, so the next lookup tries again.
+        except ClientError as err:
+            # Not cached, so the next lookup tries again
             LOGGER.debug("Failed to look up object %d: %s", vid, err)
             return ObjectInfo(f"VID {vid}", None, None)
+        except Exception:
+            # A decode or XML error, which aiovantage doesn't wrap, would repeat, so
+            # cache the fallback rather than ask the controller again each time
+            LOGGER.warning(
+                "Failed to read object %d, naming it by VID", vid, exc_info=True
+            )
+            info = ObjectInfo(f"VID {vid}", None, None)
+            self._cache[vid] = info
+            return info
 
         info = _object_info(vid, objects[0].obj if objects else None)
         self._cache[vid] = info
