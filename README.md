@@ -231,7 +231,9 @@ The following is an example of the payload for a power sensor going out of range
 
 ### `vantage_system_log`
 
-This event is fired for notable entries in the controller's system log: warnings, errors, and modules going offline or coming back online. Each one is also shown in the logbook. The following is an example of the payload:
+This event is fired for notable entries in the controller's system log: warnings, errors, and modules going offline or coming back online. Each one is also shown in the logbook.
+
+Writing a program to the controller logs about a hundred warnings, so two kinds are left out. Script compiler warnings are dropped, though compiler errors are kept. A warning that repeats with the same wording and object within a minute fires once, and again every hour while the repeats continue. `[ALERT]` warnings and module messages always fire. The following is an example of the payload:
 
 ```json
 {

@@ -23,12 +23,17 @@ MODULE_BUS_CHANGE = re.compile(r"^Module (Offline|Online)\b")
 OBJECT_VID = re.compile(r"\(VID:(\d+)\)|\[(\d+)\]")
 
 # A program write compiles the controller's scripts, and their warnings are not faults
-COMPILE_SOURCES = {"Compiler", "ScriptEngine"}
+COMPILER_SOURCE = "Compiler"
+SCRIPT_COMPILED = re.compile(r"^\S+ compiled with warnings\b")
 
-# A program write also logs a burst of warnings of one shape as stations and objects
-# reload, eg. "Station bus command (1040) not processed on station 3 (84)"
+# A warning can repeat in a burst of one shape, as a program write does while stations
+# and objects reload, eg. "Station bus command (1040) not processed on station 3 (84)".
+# Pass the first of a burst, and pass one again hourly while the burst continues.
 REPEAT_WINDOW = 60.0
+REPEAT_REMINDER = 3600.0
 NUMBER = re.compile(r"\d+")
+
+type Shape = tuple[str, str, str | None]
 
 
 def is_notable(log: SystemLogReceived) -> bool:
@@ -37,21 +42,31 @@ def is_notable(log: SystemLogReceived) -> bool:
 
 
 def is_noise(
-    log: SystemLogReceived, last_seen: dict[tuple[str, str], float], now: float
+    log: SystemLogReceived, seen: dict[Shape, tuple[float, float]], now: float
 ) -> bool:
-    """Return whether a notable warning is program-write noise rather than a fault."""
+    """Return whether a notable warning is compiler output or a repeat in a burst."""
     if log.type != SysLogType.WARNING:
         return False
-    if log.source in COMPILE_SOURCES:
-        return True
     if log.message.startswith("[ALERT]") or MODULE_LOG.match(log.message):
         return False
+    if log.source == COMPILER_SOURCE or SCRIPT_COMPILED.match(log.message):
+        return True
 
-    # Pass the first warning of a shape, and drop repeats until it has been quiet
-    shape = (log.source, NUMBER.sub("N", log.message))
-    last = last_seen.get(shape)
-    last_seen[shape] = now
-    return last is not None and now - last < REPEAT_WINDOW
+    # The shape ignores numbers but keeps the object, so two objects never collapse
+    vid = OBJECT_VID.search(log.message)
+    shape = (log.source, NUMBER.sub("N", log.message), vid.group(0) if vid else None)
+    last_seen, last_passed = seen.get(shape, (None, None))
+    if (
+        last_seen is not None
+        and last_passed is not None
+        and now - last_seen < REPEAT_WINDOW
+        and now - last_passed < REPEAT_REMINDER
+    ):
+        seen[shape] = (now, last_passed)
+        return True
+
+    seen[shape] = (now, now)
+    return False
 
 
 async def async_setup_system_log(
@@ -69,7 +84,7 @@ async def async_setup_system_log(
 
     # Fire in the order the controller logged, though some names need a lookup
     queue: asyncio.Queue[SystemLogReceived] = asyncio.Queue()
-    last_seen: dict[tuple[str, str], float] = {}
+    seen: dict[Shape, tuple[float, float]] = {}
 
     async def fire_in_order() -> None:
         while True:
@@ -97,7 +112,7 @@ async def async_setup_system_log(
                 hass, coordinator.async_request_refresh(), "vantage_module_status"
             )
 
-        if is_noise(log, last_seen, time.monotonic()):
+        if is_noise(log, seen, time.monotonic()):
             return
 
         queue.put_nowait(log)
