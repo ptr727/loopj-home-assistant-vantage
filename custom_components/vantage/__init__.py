@@ -29,6 +29,8 @@ from .entity import async_cleanup_entities
 from .events import async_setup_events
 from .migrate import async_migrate_data
 from .services import async_register_services
+from .system_log import async_setup_system_log
+from .triggers import async_setup_triggers
 
 PLATFORMS: list[Platform] = [
     Platform.BINARY_SENSOR,
@@ -74,6 +76,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: VantageConfigEntry) -> b
 
         # Generate events for button presses, etc.
         async_setup_events(hass, entry)
+
+        # Generate events naming the object that started each task
+        await async_setup_triggers(hass, entry)
+
+        # Generate events for notable system logs, eg. a module losing power
+        await async_setup_system_log(hass, entry)
 
         # Clean up any orphaned devices and entities
         async_cleanup_devices(hass, entry)

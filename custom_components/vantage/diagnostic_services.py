@@ -1,0 +1,156 @@
+"""Services that read the controller's diagnostics, as InFusion Diagnostics shows them."""
+
+from collections.abc import Awaitable, Callable, Coroutine
+from typing import Any
+
+from aiovantage.config_client import DiagnosticInterface, SysLogType
+from aiovantage.errors import ClientError
+import voluptuous as vol
+
+from homeassistant.config_entries import ConfigEntryState
+from homeassistant.core import (
+    HomeAssistant,
+    ServiceCall,
+    ServiceResponse,
+    SupportsResponse,
+)
+from homeassistant.exceptions import HomeAssistantError
+from homeassistant.util.json import JsonValueType
+
+from .config_entry import VantageConfigEntry
+from .const import (
+    DOMAIN,
+    SERVICE_GET_MODULE_STATUS,
+    SERVICE_GET_SYSTEM_LOG,
+    SERVICE_GET_TRIGGER_HISTORY,
+)
+from .triggers import describe_trigger
+
+ATTR_LIMIT = "limit"
+
+LOG_SCHEMA = vol.Schema(
+    {vol.Optional(ATTR_LIMIT, default=100): vol.All(int, vol.Range(min=1))}
+)
+
+type EntryReader = Callable[
+    [VantageConfigEntry, ServiceCall], Awaitable[list[JsonValueType]]
+]
+
+
+async def _trigger_history(
+    entry: VantageConfigEntry, call: ServiceCall
+) -> list[JsonValueType]:
+    vantage = entry.runtime_data.client
+    log = await DiagnosticInterface.get_event_log(vantage.config_client)
+
+    entries: list[JsonValueType] = []
+    for item in log[-call.data[ATTR_LIMIT] :]:
+        described = await describe_trigger(
+            entry.runtime_data.object_names,
+            item.source or 0,
+            item.destination or 0,
+            item.event,
+            item.param1,
+            item.param2,
+        )
+        # Times are in the controller's local time
+        entries.append({"time": item.time_stamp, "host": vantage.host} | described)
+
+    return entries
+
+
+async def _system_log(
+    entry: VantageConfigEntry, call: ServiceCall
+) -> list[JsonValueType]:
+    vantage = entry.runtime_data.client
+    log = await DiagnosticInterface.get_sys_log(vantage.config_client)
+
+    return [
+        {
+            # Month, day and time in the controller's local time, eg. "10-06T06:51:15"
+            "time": item.time,
+            "host": vantage.host,
+            "type": _sys_log_type_name(item.log_type, item.type),
+            "source": item.src,
+            "message": (item.msg or "").strip(),
+        }
+        for item in log[-call.data[ATTR_LIMIT] :]
+    ]
+
+
+async def _module_status(
+    entry: VantageConfigEntry, call: ServiceCall
+) -> list[JsonValueType]:
+    vantage = entry.runtime_data.client
+    found = await DiagnosticInterface.get_modules(vantage.config_client)
+
+    modules: list[JsonValueType] = []
+    for module in found:
+        status = module.status
+        modules.append(
+            {
+                "host": vantage.host,
+                "module_id": module.vid,
+                "module_name": await entry.runtime_data.object_names.name(
+                    module.vid or 0
+                ),
+                "address": module.address,
+                "model": module.model,
+                "version": module.version,
+                "status": [status.proc0, status.proc1] if status else None,
+                "errors": module.errors,
+            }
+        )
+
+    return modules
+
+
+def _sys_log_type_name(log_type: SysLogType | None, raw: int | None) -> str:
+    return log_type.name.lower() if log_type is not None else f"unknown_{raw}"
+
+
+def async_register_diagnostic_services(hass: HomeAssistant) -> None:
+    """Register the response-only services that read controller diagnostics."""
+
+    def response_service(
+        key: str, read: EntryReader, what: str
+    ) -> Callable[[ServiceCall], Coroutine[Any, Any, ServiceResponse]]:
+        async def handler(call: ServiceCall) -> ServiceResponse:
+            items: list[JsonValueType] = []
+            for entry in hass.config_entries.async_entries(DOMAIN):
+                if entry.state is not ConfigEntryState.LOADED:
+                    continue
+                try:
+                    items.extend(await read(entry, call))
+                except ClientError as err:
+                    raise HomeAssistantError(f"Failed to read {what}: {err}") from err
+
+            return {key: items}
+
+        return handler
+
+    for service, handler, schema in (
+        (
+            SERVICE_GET_TRIGGER_HISTORY,
+            response_service("entries", _trigger_history, "trigger history"),
+            LOG_SCHEMA,
+        ),
+        (
+            SERVICE_GET_SYSTEM_LOG,
+            response_service("entries", _system_log, "system log"),
+            LOG_SCHEMA,
+        ),
+        (
+            SERVICE_GET_MODULE_STATUS,
+            response_service("modules", _module_status, "module status"),
+            vol.Schema({}),
+        ),
+    ):
+        if not hass.services.has_service(DOMAIN, service):
+            hass.services.async_register(
+                DOMAIN,
+                service,
+                handler,
+                schema=schema,
+                supports_response=SupportsResponse.ONLY,
+            )
