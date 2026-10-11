@@ -2,6 +2,7 @@
 
 from typing import Any, override
 
+from aiovantage.config_client import ModuleInfo
 from aiovantage.controllers import Controller
 from aiovantage.objects import DryContact, SystemObject
 
@@ -71,6 +72,9 @@ class VantageModuleConnectivityEntity(VantageEntity[SystemObject], BinarySensorE
     _attr_device_class = BinarySensorDeviceClass.CONNECTIVITY
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
+    # Kept while the module is off the bus, when the controller no longer lists it
+    _last_info: ModuleInfo | None = None
+
     @property
     def coordinator(self) -> ModuleStatusCoordinator | None:
         """Return the module status coordinator."""
@@ -109,8 +113,7 @@ class VantageModuleConnectivityEntity(VantageEntity[SystemObject], BinarySensorE
     @property
     @override
     def extra_state_attributes(self) -> dict[str, Any] | None:
-        status = self._module_status()
-        if status is None or (info := status.modules.get(self.obj.vid)) is None:
+        if (info := self._last_info) is None:
             return None
 
         # The error count rises each time the module loses and regains the bus
@@ -128,6 +131,17 @@ class VantageModuleConnectivityEntity(VantageEntity[SystemObject], BinarySensorE
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
         if coordinator := self.coordinator:
+            self._record_info()
             self.async_on_remove(
-                coordinator.async_add_listener(self.async_write_ha_state)
+                coordinator.async_add_listener(self._handle_status_update)
             )
+
+    def _handle_status_update(self) -> None:
+        self._record_info()
+        self.async_write_ha_state()
+
+    def _record_info(self) -> None:
+        if (status := self._module_status()) is not None and (
+            info := status.modules.get(self.obj.vid)
+        ) is not None:
+            self._last_info = info
