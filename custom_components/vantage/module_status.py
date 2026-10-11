@@ -56,6 +56,11 @@ async def read_module_status(entry: VantageConfigEntry) -> ModuleStatus:
 
     status = ModuleStatus()
     for vid, master in enclosures.items():
+        # The entry was unloaded mid-read, so don't reopen its closed client
+        if names.closed:
+            status.failed[vid] = "Not read, the integration was unloaded"
+            continue
+
         number = (await names.info(vid)).position
         if number is None:
             LOGGER.debug("Enclosure %d has no position, skipping", vid)

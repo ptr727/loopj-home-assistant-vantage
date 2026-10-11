@@ -35,6 +35,7 @@ class ObjectNames:
     def clear(self) -> None:
         """Forget looked up objects, eg. after the controller is reprogrammed."""
         self._cache.clear()
+        self._warned.clear()
 
     def cancel(self) -> None:
         """Stop looking objects up, before the client closes, so none reopens it."""
@@ -121,6 +122,7 @@ class ObjectNames:
             LOGGER.debug("Lookup of object %d returned object %d", vid, objects[0].vid)
             return ObjectInfo(f"VID {vid}", None, None)
 
+        self._warned.discard(vid)
         info = _object_info(vid, objects[0].obj if objects else None)
         self._cache[vid] = info
         return info

@@ -3,6 +3,7 @@
 from collections.abc import Awaitable, Callable, Coroutine
 from typing import Any
 
+from aiovantage import Vantage
 from aiovantage.config_client import DiagnosticInterface, SysLogType
 from aiovantage.errors import ClientResponseError
 import voluptuous as vol
@@ -29,6 +30,8 @@ from .triggers import describe_trigger
 
 ATTR_LIMIT = "limit"
 
+UNLOADED = "Not read, the integration was unloaded"
+
 LOG_SCHEMA = vol.Schema(
     {vol.Optional(ATTR_LIMIT, default=100): vol.All(int, vol.Range(min=1))}
 )
@@ -40,15 +43,12 @@ type EntryReader = Callable[
 ]
 
 
-def _masters(entry: VantageConfigEntry) -> list[int | None]:
+def _masters(vantage: Vantage) -> list[int | None]:
     # None addresses the connected master, then each peer in a multi-master system
-    return [None, *entry.runtime_data.client.peers]
+    return [None, *vantage.peers]
 
 
-def _master_error(
-    entry: VantageConfigEntry, master: int | None, error: str
-) -> JsonValueType:
-    vantage = entry.runtime_data.client
+def _master_error(vantage: Vantage, master: int | None, error: str) -> JsonValueType:
     return {
         "host": vantage.host,
         "master": master or vantage.master_number,
@@ -56,15 +56,21 @@ def _master_error(
     }
 
 
+def _not_read(
+    vantage: Vantage, masters: list[int | None], reason: str
+) -> list[JsonValueType]:
+    return [_master_error(vantage, master, reason) for master in masters]
+
+
 def _read_failed(
-    entry: VantageConfigEntry,
+    vantage: Vantage,
     masters: list[int | None],
     index: int,
     err: Exception,
     errors: list[JsonValueType],
 ) -> bool:
     """Record a master that couldn't be read, and return whether to read the next."""
-    errors.append(_master_error(entry, masters[index], _error_text(err)))
+    errors.append(_master_error(vantage, masters[index], _error_text(err)))
 
     # A peer's error answer is read in full before it is reported, so the shared
     # connection stays in step and the next peer can be read. Any other failure stops
@@ -75,10 +81,11 @@ def _read_failed(
 
     # Peers are read through the connected master's connection, which these failures
     # can leave unusable or out of step
-    failed = masters[index] or entry.runtime_data.client.master_number
+    failed = masters[index] or vantage.master_number
     errors.extend(
-        _master_error(entry, master, f"Not read after master {failed} failed")
-        for master in masters[index + 1 :]
+        _not_read(
+            vantage, masters[index + 1 :], f"Not read after master {failed} failed"
+        )
     )
     return False
 
@@ -91,13 +98,16 @@ def _error_text(err: Exception) -> str:
 async def _trigger_history(
     entry: VantageConfigEntry, call: ServiceCall, errors: list[JsonValueType]
 ) -> list[JsonValueType]:
+    # Captured once, since HA deletes runtime_data after an unload
     vantage = entry.runtime_data.client
+    names = entry.runtime_data.object_names
 
     entries: list[JsonValueType] = []
-    masters = _masters(entry)
+    masters = _masters(vantage)
     for index, master in enumerate(masters):
         # The entry was unloaded mid-read, so don't reopen its closed client
-        if entry.runtime_data.object_names.closed:
+        if names.closed:
+            errors.extend(_not_read(vantage, masters[index:], UNLOADED))
             break
 
         # Keep what the other masters returned when one can't be read
@@ -106,13 +116,13 @@ async def _trigger_history(
                 vantage.config_client, master=master
             )
         except Exception as err:
-            if _read_failed(entry, masters, index, err, errors):
+            if _read_failed(vantage, masters, index, err, errors):
                 continue
             break
 
         for item in log[-call.data[ATTR_LIMIT] :]:
             described = await describe_trigger(
-                entry.runtime_data.object_names,
+                names,
                 item.source or 0,
                 item.destination or 0,
                 item.event,
@@ -135,13 +145,16 @@ async def _trigger_history(
 async def _system_log(
     entry: VantageConfigEntry, call: ServiceCall, errors: list[JsonValueType]
 ) -> list[JsonValueType]:
+    # Captured once, since HA deletes runtime_data after an unload
     vantage = entry.runtime_data.client
+    names = entry.runtime_data.object_names
 
     entries: list[JsonValueType] = []
-    masters = _masters(entry)
+    masters = _masters(vantage)
     for index, master in enumerate(masters):
         # The entry was unloaded mid-read, so don't reopen its closed client
-        if entry.runtime_data.object_names.closed:
+        if names.closed:
+            errors.extend(_not_read(vantage, masters[index:], UNLOADED))
             break
 
         try:
@@ -149,7 +162,7 @@ async def _system_log(
                 vantage.config_client, master=master
             )
         except Exception as err:
-            if _read_failed(entry, masters, index, err, errors):
+            if _read_failed(vantage, masters, index, err, errors):
                 continue
             break
 
@@ -218,12 +231,13 @@ def async_register_diagnostic_services(hass: HomeAssistant) -> None:
             for entry in hass.config_entries.async_entries(DOMAIN):
                 if entry.state is not ConfigEntryState.LOADED:
                     continue
+                host = entry.runtime_data.client.host
                 try:
                     items.extend(await read(entry, call, errors))
                 except Exception as err:
                     errors.append(
                         {
-                            "host": entry.runtime_data.client.host,
+                            "host": host,
                             "error": _error_text(err),
                         }
                     )
