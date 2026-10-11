@@ -97,6 +97,8 @@ Vantage *Blind*, *BlindGroup*, *QISBlind*, *QubeBlind*, *RelayBlind*, *Somfy.RS-
 
 Vantage *DryContact* objects (motion sensors, etc) will appear as binary sensors in Home Assistant.
 
+Each Vantage module (eg. SDM12, UDM08) also gets a diagnostic *Connectivity* binary sensor, eg. `binary_sensor.module_2_connectivity`, which turns off when the module stops responding on its enclosure bus, for example when the breaker feeding it trips. It is checked every 30 seconds, and at once when the controller logs a module going offline or online. Its `address` attribute is the module's position on the bus, and its `errors` attribute is the controller's error count for the module, which rises each time the module drops off the bus.
+
 ### Sensors
 
 Vantage *AnemoSensor* (wind speed), *LightSensor*, *Temperature*, and *OmniSensor* objects will appear as sensors in Home Assistant.
@@ -193,6 +195,64 @@ This event is fired when a Vantage task changes it's LED state. The following is
 | `task_name` | The name of the task that changed state. |
 | `task_state` | The new LED state of the task. |
 
+### `vantage_trigger`
+
+This event is fired each time an object triggers a task, and names the object that did, for example a keypad button, a timer, a sensor going out of range, or a module raising an alert. These are the live counterpart of the controller's trigger history, and each one is also shown in the logbook.
+
+The following is an example of the payload for a power sensor going out of range:
+
+```json
+{
+    "host": "192.0.2.10",
+    "trigger_type": "out_of_range",
+    "event": 7,
+    "source_id": 120,
+    "source_name": "Power Sensor - Line A",
+    "source_path": ["Power Sensor - Line A", "Module 2", "Enclosure 1", "Controller 1"],
+    "task_id": 300,
+    "task_name": "Range Fault Alert",
+    "param1": 0,
+    "param2": 0
+}
+```
+
+| Attribute | Description |
+| --- | --- |
+| `host` | The host of the controller that reported the trigger. |
+| `trigger_type` | The type of trigger, eg. `button_down`, `button_up`, `button_hold`, `timer`, `in_range`, `out_of_range`, or `module_alert`. |
+| `event` | The controller's numeric code for the trigger type. |
+| `source_id` | The Vantage ID of the object that triggered the task. |
+| `source_name` | The name of the object that triggered the task. |
+| `source_path` | The names of the object and its parents, eg. a sensor, its module, enclosure and controller. |
+| `task_id` | The Vantage ID of the task that was started. |
+| `task_name` | The name of the task that was started. |
+| `param1` | The first trigger parameter, eg. `2` for the second press of a double press, or the line feed of a module alert. |
+| `param2` | The second trigger parameter. |
+
+### `vantage_system_log`
+
+This event is fired for notable entries in the controller's system log: warnings, errors, and modules going offline or coming back online. Each one is also shown in the logbook. The following is an example of the payload:
+
+```json
+{
+    "host": "192.0.2.10",
+    "type": "warning",
+    "source": "Controller",
+    "message": "[ALERT] Module 'Module 2' (VID:110) detected missing line feed 1",
+    "object_id": 110,
+    "object_name": "Module 2"
+}
+```
+
+| Attribute | Description |
+| --- | --- |
+| `host` | The host of the controller that logged the entry. |
+| `type` | The log type, eg. `information`, `warning`, `error`. |
+| `source` | The source of the log, eg. `Controller`. |
+| `message` | The log message. |
+| `object_id` | The Vantage ID of the object the log is about, when it names one. |
+| `object_name` | The name of the object the log is about, when it names one. |
+
 ## Services
 
 This integration exposes the following services which can be called from automations.
@@ -204,3 +264,17 @@ You can start a Vantage task by calling the `vantage.start_task` service, with e
 ### `vantage.stop_task`
 
 You can stop a Vantage task by calling the `vantage.stop_task` service, with either the Vantage ID of the task, or the task's name.
+
+### `vantage.get_trigger_history`
+
+Returns the controller's trigger history, the same entries InFusion Diagnostics shows in its History view, oldest first. Each entry has the same attributes as the `vantage_trigger` event, plus the `time` it was recorded, in the controller's local time, and the `master` that recorded it. The optional `limit` caps the number of entries returned per controller, newest kept, and defaults to 100.
+
+### `vantage.get_system_log`
+
+Returns the controller's system log, the same entries InFusion Diagnostics shows in its Log view, oldest first. The optional `limit` works as for `vantage.get_trigger_history`.
+
+### `vantage.get_module_status`
+
+Returns each module known to the controllers, with `online` set to whether it responds on its enclosure bus (or null if its enclosure couldn't be read), and the address, model, firmware version, status bytes and error count of those that respond.
+
+Each of these services returns an `errors` list naming any controller that couldn't be read, and fails only when none could.
