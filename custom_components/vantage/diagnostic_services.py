@@ -33,8 +33,10 @@ LOG_SCHEMA = vol.Schema(
     {vol.Optional(ATTR_LIMIT, default=100): vol.All(int, vol.Range(min=1))}
 )
 
+# A reader returns what it read, and adds any master it couldn't read to the errors
 type EntryReader = Callable[
-    [VantageConfigEntry, ServiceCall], Awaitable[list[JsonValueType]]
+    [VantageConfigEntry, ServiceCall, list[JsonValueType]],
+    Awaitable[list[JsonValueType]],
 ]
 
 
@@ -43,16 +45,33 @@ def _masters(entry: VantageConfigEntry) -> list[int | None]:
     return [None, *entry.runtime_data.client.peers]
 
 
+def _master_error(
+    entry: VantageConfigEntry, master: int | None, err: ClientError
+) -> JsonValueType:
+    vantage = entry.runtime_data.client
+    return {
+        "host": vantage.host,
+        "master": master or vantage.master_number,
+        "error": str(err),
+    }
+
+
 async def _trigger_history(
-    entry: VantageConfigEntry, call: ServiceCall
+    entry: VantageConfigEntry, call: ServiceCall, errors: list[JsonValueType]
 ) -> list[JsonValueType]:
     vantage = entry.runtime_data.client
 
     entries: list[JsonValueType] = []
     for master in _masters(entry):
-        log = await DiagnosticInterface.get_event_log(
-            vantage.config_client, master=master
-        )
+        # Keep what the other masters returned when one can't be read
+        try:
+            log = await DiagnosticInterface.get_event_log(
+                vantage.config_client, master=master
+            )
+        except ClientError as err:
+            errors.append(_master_error(entry, master, err))
+            continue
+
         for item in log[-call.data[ATTR_LIMIT] :]:
             described = await describe_trigger(
                 entry.runtime_data.object_names,
@@ -76,15 +95,20 @@ async def _trigger_history(
 
 
 async def _system_log(
-    entry: VantageConfigEntry, call: ServiceCall
+    entry: VantageConfigEntry, call: ServiceCall, errors: list[JsonValueType]
 ) -> list[JsonValueType]:
     vantage = entry.runtime_data.client
 
     entries: list[JsonValueType] = []
     for master in _masters(entry):
-        log = await DiagnosticInterface.get_sys_log(
-            vantage.config_client, master=master
-        )
+        try:
+            log = await DiagnosticInterface.get_sys_log(
+                vantage.config_client, master=master
+            )
+        except ClientError as err:
+            errors.append(_master_error(entry, master, err))
+            continue
+
         entries.extend(
             {
                 # Month, day and time in the controller's local time, eg. "01-02T03:04:05"
@@ -102,7 +126,7 @@ async def _system_log(
 
 
 async def _module_status(
-    entry: VantageConfigEntry, call: ServiceCall
+    entry: VantageConfigEntry, call: ServiceCall, errors: list[JsonValueType]
 ) -> list[JsonValueType]:
     vantage = entry.runtime_data.client
     status = await read_module_status(entry)
@@ -147,7 +171,7 @@ def async_register_diagnostic_services(hass: HomeAssistant) -> None:
                 if entry.state is not ConfigEntryState.LOADED:
                     continue
                 try:
-                    items.extend(await read(entry, call))
+                    items.extend(await read(entry, call, errors))
                 except ClientError as err:
                     errors.append(
                         {"host": entry.runtime_data.client.host, "error": str(err)}
