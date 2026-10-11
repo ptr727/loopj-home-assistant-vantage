@@ -97,7 +97,7 @@ Vantage *Blind*, *BlindGroup*, *QISBlind*, *QubeBlind*, *RelayBlind*, *Somfy.RS-
 
 Vantage *DryContact* objects (motion sensors, etc) will appear as binary sensors in Home Assistant.
 
-Each Vantage module (eg. SDM12, UDM08) also gets a diagnostic *Connectivity* binary sensor, eg. `binary_sensor.module_2_connectivity`, which turns off when the module stops responding on its enclosure bus, for example when the breaker feeding it trips. It is checked every 30 seconds, and at once when the controller logs a module going offline or online. Its `address` attribute is the module's position on the bus, and its `errors` attribute is the controller's error count for the module, which rises each time the module drops off the bus.
+Each Vantage module (eg. SDM12, UDM08) also gets a diagnostic *Connectivity* binary sensor, eg. `binary_sensor.module_2_connectivity`, which turns off when the module stops responding on its enclosure bus, for example when the breaker feeding it trips. It is checked every 30 seconds, and at once when the controller logs a module going offline or online. Its `address` attribute is the module's position on the bus, and its `errors` attribute is the controller's error count for the module, which rises each time the module drops off the bus. While the module is off the bus both keep the last values the controller reported, so the count shows the latest drop once the module is back. Both are absent until the module has answered once since the integration was last loaded.
 
 ### Sensors
 
@@ -252,8 +252,8 @@ Writing a program to the controller logs about a hundred warnings, so two kinds 
 | `type` | The log type, eg. `information`, `warning`, `error`. |
 | `source` | The source of the log, eg. `Controller`. |
 | `message` | The log message. |
-| `object_id` | The Vantage ID of the object the log is about, when it names one. |
-| `object_name` | The name of the object the log is about, when it names one. |
+| `object_id` | The Vantage ID of the first object the log names, when it names one. |
+| `object_name` | The name of the first object the log names, when it names one. |
 
 ## Services
 
@@ -269,11 +269,11 @@ You can stop a Vantage task by calling the `vantage.stop_task` service, with eit
 
 ### `vantage.get_trigger_history`
 
-Returns the controller's trigger history, the same entries InFusion Diagnostics shows in its History view, oldest first. Each entry has the same attributes as the `vantage_trigger` event, plus the `time` it was recorded, in the controller's local time, and the `master` that recorded it. The optional `limit` caps the number of entries returned per controller, newest kept, and defaults to 100.
+Returns the controller's trigger history, the same entries InFusion Diagnostics shows in its History view, oldest first for each master. In a system with several masters, each master's entries follow the previous master's, and each configured Vantage integration's entries follow the previous one's, so the `master` and `host` attributes tell them apart. Each entry has the same attributes as the `vantage_trigger` event, plus the `time` it was recorded, in the controller's local time, and the `master` that recorded it. The optional `limit` caps the number of entries returned per master, newest kept, and defaults to 100.
 
 ### `vantage.get_system_log`
 
-Returns the controller's system log, the same entries InFusion Diagnostics shows in its Log view, oldest first. The optional `limit` works as for `vantage.get_trigger_history`.
+Returns the controller's system log, the same entries InFusion Diagnostics shows in its Log view. The order and the optional `limit` work as for `vantage.get_trigger_history`.
 
 ### `vantage.get_module_status`
 
