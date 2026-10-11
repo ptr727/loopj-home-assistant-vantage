@@ -54,7 +54,13 @@ async def async_setup_system_log(
             }
             if match := OBJECT_VID.search(log.message):
                 vid = int(match.group(1) or match.group(2))
-                payload |= {"object_id": vid, "object_name": await names.name(vid)}
+                # One bad log must not stop the worker, or no later log would fire
+                try:
+                    name = await names.name(vid)
+                except Exception:
+                    LOGGER.exception("Failed to name VID %d in a system log", vid)
+                    name = f"VID {vid}"
+                payload |= {"object_id": vid, "object_name": name}
 
             hass.bus.async_fire(EVENT_SYSTEM_LOG, payload)
 

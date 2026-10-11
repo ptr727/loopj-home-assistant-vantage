@@ -4,7 +4,7 @@ from collections.abc import Awaitable, Callable, Coroutine
 from typing import Any
 
 from aiovantage.config_client import DiagnosticInterface, SysLogType
-from aiovantage.errors import ClientError, ClientResponseError
+from aiovantage.errors import ClientResponseError
 import voluptuous as vol
 
 from homeassistant.config_entries import ConfigEntryState
@@ -60,19 +60,21 @@ def _read_failed(
     entry: VantageConfigEntry,
     masters: list[int | None],
     index: int,
-    err: ClientError,
+    err: Exception,
     errors: list[JsonValueType],
 ) -> bool:
     """Record a master that couldn't be read, and return whether to read the next."""
     errors.append(_master_error(entry, masters[index], _error_text(err)))
 
     # A peer's error answer is read in full before it is reported, so the shared
-    # connection stays in step and the next peer can be read
+    # connection stays in step and the next peer can be read. Any other failure stops
+    # the reading: the connected master's own failure, a connection error, timeout or
+    # failed login, or an error aiovantage doesn't wrap, eg. a decode or XML error.
     if masters[index] is not None and isinstance(err, ClientResponseError):
         return True
 
-    # Peers are read through the connected master's connection, which a connection
-    # error or timeout leaves unusable or out of step, so the rest are not read
+    # Peers are read through the connected master's connection, which these failures
+    # can leave unusable or out of step
     failed = masters[index] or entry.runtime_data.client.master_number
     errors.extend(
         _master_error(entry, master, f"Not read after master {failed} failed")
@@ -99,7 +101,7 @@ async def _trigger_history(
             log = await DiagnosticInterface.get_event_log(
                 vantage.config_client, master=master
             )
-        except ClientError as err:
+        except Exception as err:
             if _read_failed(entry, masters, index, err, errors):
                 continue
             break
@@ -138,7 +140,7 @@ async def _system_log(
             log = await DiagnosticInterface.get_sys_log(
                 vantage.config_client, master=master
             )
-        except ClientError as err:
+        except Exception as err:
             if _read_failed(entry, masters, index, err, errors):
                 continue
             break
@@ -164,6 +166,10 @@ async def _module_status(
 ) -> list[JsonValueType]:
     vantage = entry.runtime_data.client
     status = await read_module_status(entry)
+    errors.extend(
+        {"host": vantage.host, "enclosure": vid, "error": error}
+        for vid, error in status.failed.items()
+    )
 
     modules: list[JsonValueType] = []
     for module in vantage.modules:
@@ -206,7 +212,7 @@ def async_register_diagnostic_services(hass: HomeAssistant) -> None:
                     continue
                 try:
                     items.extend(await read(entry, call, errors))
-                except ClientError as err:
+                except Exception as err:
                     errors.append(
                         {
                             "host": entry.runtime_data.client.host,

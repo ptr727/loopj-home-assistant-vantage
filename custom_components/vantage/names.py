@@ -5,7 +5,6 @@ from typing import Any, NamedTuple
 
 from aiovantage import Vantage
 from aiovantage.config_client import ConfigurationInterface
-from aiovantage.errors import ClientError
 
 from .const import LOGGER
 
@@ -80,8 +79,9 @@ class ObjectNames:
             objects = await ConfigurationInterface.get_object(
                 self._vantage.config_client, vid
             )
-        except ClientError as err:
-            # Not cached, so the next lookup tries again
+        except Exception as err:
+            # aiovantage can also raise decode, XML or buffer errors that aren't a
+            # ClientError. Not cached, so the next lookup tries again.
             LOGGER.debug("Failed to look up object %d: %s", vid, err)
             return ObjectInfo(f"VID {vid}", None, None)
 

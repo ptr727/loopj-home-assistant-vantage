@@ -27,6 +27,9 @@ class ModuleStatus:
     enclosures: set[int] = field(default_factory=set[int])
     """VIDs of the enclosures whose bus was read."""
 
+    failed: dict[int, str] = field(default_factory=dict[int, str])
+    """Enclosures whose bus couldn't be read, keyed by VID, with the error."""
+
     def is_online(self, module: SystemObject) -> bool | None:
         """Return whether a module responds, or None if its bus couldn't be read."""
         if enclosure_vid(module) not in self.enclosures:
@@ -66,6 +69,7 @@ async def read_module_status(entry: VantageConfigEntry) -> ModuleStatus:
             )
         except ClientError as err:
             LOGGER.debug("Failed to read modules in enclosure %d: %s", vid, err)
+            status.failed[vid] = str(err) or type(err).__name__
             continue
 
         status.enclosures.add(vid)
