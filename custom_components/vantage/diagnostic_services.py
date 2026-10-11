@@ -96,6 +96,10 @@ async def _trigger_history(
     entries: list[JsonValueType] = []
     masters = _masters(entry)
     for index, master in enumerate(masters):
+        # The entry was unloaded mid-read, so don't reopen its closed client
+        if entry.runtime_data.object_names.closed:
+            break
+
         # Keep what the other masters returned when one can't be read
         try:
             log = await DiagnosticInterface.get_event_log(
@@ -136,6 +140,10 @@ async def _system_log(
     entries: list[JsonValueType] = []
     masters = _masters(entry)
     for index, master in enumerate(masters):
+        # The entry was unloaded mid-read, so don't reopen its closed client
+        if entry.runtime_data.object_names.closed:
+            break
+
         try:
             log = await DiagnosticInterface.get_sys_log(
                 vantage.config_client, master=master

@@ -107,7 +107,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: VantageConfigEntry) -> b
                 # Names of objects the integration doesn't load may have changed too
                 entry.runtime_data.object_names.clear()
 
-            hass.async_create_task(refresh_controllers())
+            # Tied to the entry, so an unload during the wait cancels it
+            entry.async_create_background_task(
+                hass, refresh_controllers(), "vantage_refresh_controllers"
+            )
 
         entry.async_on_unload(
             vantage.masters.subscribe(ObjectUpdated, on_master_updated)
