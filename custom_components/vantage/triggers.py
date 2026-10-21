@@ -15,8 +15,11 @@ from .names import ObjectNames
 
 def trigger_type_name(event: int | None) -> str:
     """Return the snake case name of a trigger type, eg. "out_of_range"."""
+    if event is None:
+        return "unknown"
+
     try:
-        return TriggerType(event).name.lower()  # type: ignore[arg-type]
+        return TriggerType(event).name.lower()
     except ValueError:
         return f"unknown_{event}"
 

@@ -85,7 +85,7 @@ def async_setup_system_log(hass: HomeAssistant, entry: VantageConfigEntry) -> No
             log = await queue.get()
             payload: dict[str, object] = {
                 "host": vantage.host,
-                "type": _type_name(log.type),
+                "type": log_type_name(log.type),
                 "source": log.source,
                 "message": log.message,
             }
@@ -123,7 +123,11 @@ def async_setup_system_log(hass: HomeAssistant, entry: VantageConfigEntry) -> No
     )
 
 
-def _type_name(log_type: int) -> str:
+def log_type_name(log_type: int | None) -> str:
+    """Return the snake case name of a system log type, eg. "warning"."""
+    if log_type is None:
+        return "unknown"
+
     try:
         return SysLogType(log_type).name.lower()
     except ValueError:

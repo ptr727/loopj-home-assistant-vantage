@@ -4,7 +4,7 @@ from collections.abc import Awaitable, Callable, Coroutine
 from typing import TYPE_CHECKING, Any
 
 from aiovantage import Vantage
-from aiovantage.config_client import DiagnosticInterface, SysLogType
+from aiovantage.config_client import DiagnosticInterface
 from aiovantage.errors import ClientResponseError
 
 # Type check against probatio, which Home Assistant 2026.9.0 and later load as voluptuous
@@ -32,6 +32,7 @@ from .const import (
     SERVICE_GET_TRIGGER_HISTORY,
 )
 from .module_status import UNLOADED, read_module_status
+from .system_log import log_type_name
 from .triggers import describe_trigger
 
 ATTR_LIMIT = "limit"
@@ -176,7 +177,7 @@ async def _system_log(
                 "time": item.time,
                 "host": vantage.host,
                 "master": master or vantage.master_number,
-                "type": _sys_log_type_name(item.log_type, item.type),
+                "type": log_type_name(item.type),
                 "source": item.src,
                 "message": (item.msg or "").strip(),
             }
@@ -217,10 +218,6 @@ async def _module_status(
         )
 
     return modules
-
-
-def _sys_log_type_name(log_type: SysLogType | None, raw: int | None) -> str:
-    return log_type.name.lower() if log_type is not None else f"unknown_{raw}"
 
 
 def async_register_diagnostic_services(hass: HomeAssistant) -> None:

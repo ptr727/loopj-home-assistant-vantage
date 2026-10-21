@@ -41,7 +41,9 @@ from custom_components.vantage.system_log import (
     REPEAT_WINDOW,
     Shape,
     is_noise,
+    log_type_name,
 )
+from custom_components.vantage.triggers import trigger_type_name
 
 from .conftest import HOST
 
@@ -199,6 +201,20 @@ async def test_trigger_event_unloaded_object(
         assert event.data["source_name"] == "Sunset"
         assert event.data["source_path"] == ["Sunset"]
         assert event.data["trigger_type"] == "timer"
+
+
+@pytest.mark.parametrize(
+    ("value", "trigger_type", "log_type"),
+    [
+        (None, "unknown", "unknown"),
+        (3, "timer", "warning"),
+        (99, "unknown_99", "unknown_99"),
+    ],
+)
+def test_type_names(value: int | None, trigger_type: str, log_type: str) -> None:
+    """Test naming trigger and system log types, known, unknown and missing."""
+    assert trigger_type_name(value) == trigger_type
+    assert log_type_name(value) == log_type
 
 
 async def test_no_enhanced_log(
