@@ -11,7 +11,10 @@ from aiovantage.config_client import SysLogType, TriggerType
 from aiovantage.events import ObjectUpdated, SystemLogReceived, TriggerReceived
 from aiovantage.objects import Button
 import pytest
-from pytest_homeassistant_custom_component.common import async_capture_events
+from pytest_homeassistant_custom_component.common import (
+    MockConfigEntry,
+    async_capture_events,
+)
 
 from homeassistant.components.logbook import (
     LOGBOOK_ENTRY_MESSAGE,
@@ -198,10 +201,20 @@ async def test_trigger_event_unloaded_object(
         assert event.data["trigger_type"] == "timer"
 
 
-async def test_no_enhanced_log(mock_vantage: Vantage) -> None:
+async def test_no_enhanced_log(
+    hass: HomeAssistant,
+    mock_vantage: Vantage,
+    mock_config_entry: MockConfigEntry,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     """Test that firmware without the enhanced log subscribes to neither log."""
     cast(MagicMock, mock_vantage.event_stream.subscribe_triggers).assert_not_called()
     cast(MagicMock, mock_vantage.event_stream.subscribe_system_log).assert_not_called()
+
+    # Said once at info level, on each setup
+    await hass.config_entries.async_reload(mock_config_entry.entry_id)
+    await hass.async_block_till_done()
+    assert caplog.text.count("no enhanced log") == 1
 
 
 @pytest.mark.parametrize("supports_enhanced_log", [True])

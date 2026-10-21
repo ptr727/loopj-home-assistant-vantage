@@ -7,7 +7,7 @@ import time
 from aiovantage.config_client import SysLogType
 from aiovantage.events import SystemLogReceived
 
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 
 from .config_entry import VantageConfigEntry
 from .const import EVENT_SYSTEM_LOG, LOGGER
@@ -70,18 +70,11 @@ def is_noise(
     return False
 
 
-async def async_setup_system_log(
-    hass: HomeAssistant, entry: VantageConfigEntry
-) -> None:
-    """Fire an event for each notable system log."""
+@callback
+def async_setup_system_log(hass: HomeAssistant, entry: VantageConfigEntry) -> None:
+    """Fire an event for each notable system log, given the enhanced log."""
     vantage = entry.runtime_data.client
     names = entry.runtime_data.object_names
-
-    # System logs are only streamed through the enhanced log
-    conn = await vantage.event_stream.start()
-    if not conn.supports_enhanced_log:
-        LOGGER.info("Controller firmware does not stream system logs")
-        return
 
     # Fire in the order the controller logged, though some names need a lookup
     queue: asyncio.Queue[SystemLogReceived] = asyncio.Queue()

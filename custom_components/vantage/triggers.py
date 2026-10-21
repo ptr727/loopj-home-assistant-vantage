@@ -6,7 +6,7 @@ from typing import Any
 from aiovantage.config_client import TriggerType
 from aiovantage.events import TriggerReceived
 
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 
 from .config_entry import VantageConfigEntry
 from .const import EVENT_TRIGGER, LOGGER
@@ -44,16 +44,11 @@ async def describe_trigger(
     }
 
 
-async def async_setup_triggers(hass: HomeAssistant, entry: VantageConfigEntry) -> None:
-    """Fire an event each time an object triggers a task."""
+@callback
+def async_setup_triggers(hass: HomeAssistant, entry: VantageConfigEntry) -> None:
+    """Fire an event each time an object triggers a task, given the enhanced log."""
     vantage = entry.runtime_data.client
     names = entry.runtime_data.object_names
-
-    # Triggers are only reported through the enhanced log
-    conn = await vantage.event_stream.start()
-    if not conn.supports_enhanced_log:
-        LOGGER.info("Controller firmware does not report triggers")
-        return
 
     # Fire in the order the controller reported, though some names need a lookup
     queue: asyncio.Queue[TriggerReceived] = asyncio.Queue()
