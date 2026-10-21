@@ -227,7 +227,7 @@ def async_register_diagnostic_services(hass: HomeAssistant) -> None:
     """Register the response-only services that read controller diagnostics."""
 
     def response_service(
-        key: str, read: EntryReader, what: str
+        key: str, read: EntryReader, failed_key: str
     ) -> Callable[[ServiceCall], Coroutine[Any, Any, ServiceResponse]]:
         async def handler(call: ServiceCall) -> ServiceResponse:
             items: list[JsonValueType] = []
@@ -248,7 +248,11 @@ def async_register_diagnostic_services(hass: HomeAssistant) -> None:
 
             # Report what could be read, and only fail when nothing could
             if errors and not items:
-                raise HomeAssistantError(f"Failed to read {what}: {errors}")
+                raise HomeAssistantError(
+                    translation_domain=DOMAIN,
+                    translation_key=failed_key,
+                    translation_placeholders={"errors": str(errors)},
+                )
 
             return {key: items, "errors": errors}
 
@@ -257,17 +261,17 @@ def async_register_diagnostic_services(hass: HomeAssistant) -> None:
     for service, handler, schema in (
         (
             SERVICE_GET_TRIGGER_HISTORY,
-            response_service("entries", _trigger_history, "trigger history"),
+            response_service("entries", _trigger_history, "get_trigger_history_failed"),
             LOG_SCHEMA,
         ),
         (
             SERVICE_GET_SYSTEM_LOG,
-            response_service("entries", _system_log, "system log"),
+            response_service("entries", _system_log, "get_system_log_failed"),
             LOG_SCHEMA,
         ),
         (
             SERVICE_GET_MODULE_STATUS,
-            response_service("modules", _module_status, "module status"),
+            response_service("modules", _module_status, "get_module_status_failed"),
             vol.Schema({}),
         ),
     ):

@@ -11,7 +11,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .config_entry import VantageConfigEntry
-from .const import LOGGER
+from .const import DOMAIN, LOGGER
 
 # Polled as a fallback, "Module Offline/Online" system logs trigger a refresh at once
 MODULE_STATUS_INTERVAL = timedelta(seconds=30)
@@ -115,11 +115,19 @@ class ModuleStatusCoordinator(DataUpdateCoordinator[ModuleStatus]):
         try:
             status = await read_module_status(self.config_entry)
         except ClientError as err:
-            raise UpdateFailed(f"Failed to read module status: {err}") from err
+            raise UpdateFailed(
+                translation_domain=DOMAIN,
+                translation_key="module_status_failed",
+                translation_placeholders={"error": str(err)},
+            ) from err
 
         # Fail the update, as before, when no enclosure could be read at all, but not when
         # the entry was unloaded mid-read, which is no failure worth an error
         if status.failed and not status.enclosures and not names.closed:
-            raise UpdateFailed(f"No enclosure could be read: {status.failed}")
+            raise UpdateFailed(
+                translation_domain=DOMAIN,
+                translation_key="no_enclosure_read",
+                translation_placeholders={"errors": str(status.failed)},
+            )
 
         return status
