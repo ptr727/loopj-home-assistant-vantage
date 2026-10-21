@@ -91,8 +91,9 @@ class VantageModuleConnectivityEntity(VantageEntity[SystemObject], BinarySensorE
     @property
     @override
     def name(self) -> str | None:
-        # The module's device is named after the module, so this reads "<module> Connectivity"
-        return "Connectivity"
+        # Named by its translated device class, after the module's device, so this reads
+        # "<module> Connectivity" in English
+        return self._device_class_name
 
     @property
     @override
