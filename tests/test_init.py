@@ -1,6 +1,8 @@
 """Tests for setting up the Vantage InFusion integration."""
 
+import asyncio
 from dataclasses import replace
+from typing import Any
 from unittest.mock import patch
 
 from aiovantage import Vantage
@@ -62,6 +64,40 @@ async def test_setup_entry_errors(
     await setup_integration(hass, mock_config_entry)
 
     assert mock_config_entry.state is state
+
+
+async def test_setup_failure_stops_lookups(
+    hass: HomeAssistant,
+    mock_vantage: Vantage,
+    mock_config_entry: MockConfigEntry,
+) -> None:
+    """Test that a setup failing after lookups started stops them."""
+    mock_config_entry.add_to_hass(hass)
+    lookups: list[asyncio.Task[str]] = []
+
+    async def lookup_forever(*args: Any) -> list[Any]:
+        await asyncio.Event().wait()
+        return []
+
+    def start_then_fail() -> None:
+        # Name an object the integration doesn't load, as a trigger would
+        names = mock_config_entry.runtime_data.object_names
+        lookups.append(hass.async_create_task(names.name(70)))
+        raise ClientConnectionError
+
+    with (
+        patch(
+            "custom_components.vantage.names.ConfigurationInterface.get_object",
+            side_effect=lookup_forever,
+        ),
+        patch.object(mock_vantage.event_stream, "start", side_effect=start_then_fail),
+    ):
+        await hass.config_entries.async_setup(mock_config_entry.entry_id)
+        await hass.async_block_till_done(wait_background_tasks=True)
+
+    assert mock_config_entry.state is ConfigEntryState.SETUP_RETRY
+    assert mock_config_entry.runtime_data.object_names.closed
+    assert await lookups[0] == "VID 70"
 
 
 async def test_connection_lost(

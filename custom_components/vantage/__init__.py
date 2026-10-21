@@ -84,6 +84,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: VantageConfigEntry) -> b
         module_status=ModuleStatusCoordinator(hass, entry, vantage, names),
     )
 
+    # Also stops lookups if setup fails, when Home Assistant runs the unload callbacks
+    entry.async_on_unload(names.cancel)
+
     try:
         # Initialize and fetch all objects
         await vantage.initialize()
