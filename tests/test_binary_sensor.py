@@ -14,11 +14,8 @@ from pytest_homeassistant_custom_component.common import (
 )
 from syrupy.assertion import SnapshotAssertion
 
-from custom_components.vantage.module_status import (
-    UNLOADED,
-    ModuleStatus,
-    read_module_status,
-)
+from custom_components.vantage.const import UNLOADED
+from custom_components.vantage.module_status import ModuleStatus, read_module_status
 from custom_components.vantage.names import ObjectNames
 from homeassistant.const import (
     STATE_OFF,

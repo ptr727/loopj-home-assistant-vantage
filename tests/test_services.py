@@ -27,7 +27,7 @@ from custom_components.vantage.const import (
     SERVICE_STOP_TASK,
 )
 from custom_components.vantage.diagnostic_services import format_errors
-from custom_components.vantage.module_status import UNLOADED
+from custom_components.vantage.const import UNLOADED
 from homeassistant.const import ATTR_ID, ATTR_NAME
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError

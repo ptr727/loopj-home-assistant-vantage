@@ -13,13 +13,11 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
-from .const import DOMAIN, LOGGER
+from .const import DOMAIN, LOGGER, UNLOADED
 from .names import ObjectNames
 
 # Polled as a fallback, "Module Offline/Online" system logs trigger a refresh at once
 MODULE_STATUS_INTERVAL = timedelta(seconds=60)
-
-UNLOADED = "Not read, the integration was unloaded"
 
 
 @dataclass
