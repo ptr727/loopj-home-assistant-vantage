@@ -17,6 +17,7 @@ NOTABLE_TYPES = {SysLogType.WARNING, SysLogType.ERROR, SysLogType.FATAL}
 
 # Module bus changes are logged as information, eg. "Module Offline: 1.9 [120]"
 MODULE_LOG = re.compile(r"^Module (Offline|Online|Status)\b")
+MODULE_BUS_CHANGE = re.compile(r"^Module (Offline|Online)\b")
 
 # The object a log is about, eg. "(VID:120)" or "[120]"
 OBJECT_VID = re.compile(r"\(VID:(\d+)\)|\[(\d+)\]")
@@ -100,7 +101,14 @@ def async_setup_system_log(hass: HomeAssistant, entry: VantageConfigEntry) -> No
     worker = OrderedWorker(hass, entry, fire, "vantage_system_log")
 
     def on_system_log(log: SystemLogReceived) -> None:
-        if not is_notable(log) or is_noise(log, seen, time.monotonic()):
+        if not is_notable(log):
+            return
+
+        # A module dropped off or rejoined the bus, refresh its connectivity now
+        if MODULE_BUS_CHANGE.match(log.message):
+            entry.runtime_data.module_status.async_refresh_if_listened()
+
+        if is_noise(log, seen, time.monotonic()):
             return
 
         worker.put(log)

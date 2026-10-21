@@ -20,6 +20,7 @@ from homeassistant.components.logbook import (
     LOGBOOK_ENTRY_MESSAGE,
     LOGBOOK_ENTRY_NAME,
 )
+from homeassistant.const import STATE_OFF, STATE_ON
 from homeassistant.core import Event, HomeAssistant
 
 from custom_components.vantage.const import (
@@ -33,6 +34,7 @@ from custom_components.vantage.const import (
     EVENT_TRIGGER,
 )
 from custom_components.vantage.logbook import async_describe_events
+from custom_components.vantage.module_status import ModuleStatus
 from custom_components.vantage.system_log import (
     COMPILER_SOURCE,
     REPEAT_REMINDER,
@@ -469,6 +471,31 @@ def test_system_log_burst_reminder() -> None:
     assert not noise("Station 7 is slow (VID:3)", now + 1)
     assert not noise("Station 7 is slow (VID:4)", now + 2)
     assert noise("Station 8 is slow (VID:4)", now + 3)
+
+
+@pytest.mark.usefixtures("entity_registry_enabled_by_default")
+@pytest.mark.parametrize("supports_enhanced_log", [True])
+async def test_system_log_module_offline(
+    hass: HomeAssistant,
+    mock_vantage: Vantage,
+) -> None:
+    """Test that a module going offline refreshes its connectivity at once."""
+    assert (state := hass.states.get("binary_sensor.module_1_connectivity"))
+    assert state.state == STATE_ON
+
+    with patch(
+        "custom_components.vantage.module_status.read_module_status",
+        return_value=ModuleStatus(enclosures={1}),
+    ):
+        system_log_callback(mock_vantage)(
+            SystemLogReceived(
+                SysLogType.INFORMATION, "Station", "Module Offline: 1.1 [3]"
+            )
+        )
+        await hass.async_block_till_done()
+
+    assert (state := hass.states.get("binary_sensor.module_1_connectivity"))
+    assert state.state == STATE_OFF
 
 
 async def test_logbook_descriptions(hass: HomeAssistant) -> None:

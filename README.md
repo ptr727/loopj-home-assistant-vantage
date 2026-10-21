@@ -99,6 +99,8 @@ Vantage *Blind*, *BlindGroup*, *QISBlind*, *QubeBlind*, *RelayBlind*, *Somfy.RS-
 
 Vantage *DryContact* objects (motion sensors, etc) will appear as binary sensors in Home Assistant.
 
+Each Vantage module (eg. SDM12, UDM08) also gets a diagnostic *Connectivity* binary sensor, eg. `binary_sensor.module_2_connectivity`, which turns off when the module stops responding on its enclosure bus, for example when the breaker feeding it trips. These sensors are disabled by default, so enable the ones you want. While any is enabled, the modules are checked every 60 seconds, and at once when the controller logs a module going offline or online. Its `address` attribute is the module's position on the bus, and its `errors` attribute is the controller's error count for the module, which rises each time the module drops off the bus. While the module is off the bus both keep the last values the controller reported, so the count shows the latest drop once the module is back. Both are absent until the module has answered once since the integration was last loaded.
+
 ### Sensors
 
 Vantage *AnemoSensor* (wind speed), *LightSensor*, *Temperature*, and *OmniSensor* objects will appear as sensors in Home Assistant.
@@ -277,7 +279,11 @@ Returns the controller's trigger history, the same entries InFusion Diagnostics 
 
 Returns the controller's system log, the same entries InFusion Diagnostics shows in its Log view. The order and the optional `limit` work as for `vantage.get_trigger_history`.
 
-Both of these services return an `errors` list naming any controller that couldn't be read, by its `host`, and any master that wasn't read, by its `master`. A peer master that answers with an error is skipped and the others are still read. Any other failure stops the reading, including an error answer from the connected master, a connection failure or a timeout, since the masters share one connection, and the masters after it are named as not read. The entries already returned are kept. A service fails when no Vantage integration is loaded, or when it returns no entries and something couldn't be read.
+### `vantage.get_module_status`
+
+Returns each module known to the controllers, with `online` set to whether it responds on its enclosure bus (or null if its enclosure couldn't be read), and the address, model, firmware version, status bytes and error count of those that respond.
+
+Each of these services returns an `errors` list naming any controller that couldn't be read, by its `host`, and for the history and log any master that wasn't read, by its `master`. For the history and log, a peer master that answers with an error is skipped and the others are still read. Any other failure stops the reading, including an error answer from the connected master, a connection failure or a timeout, since the masters share one connection, and the masters after it are named as not read. For the module status, any enclosure that couldn't be read is named by its `enclosure`. The entries already returned are kept. A service fails when no Vantage integration is loaded, or when it returns no entries and something couldn't be read.
 
 ## Removing the integration
 

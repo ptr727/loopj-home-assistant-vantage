@@ -3,9 +3,11 @@
 from collections.abc import Generator
 from contextlib import nullcontext
 from decimal import Decimal
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 
 from aiovantage import Vantage
+from aiovantage.config_client import ModuleInfo
 from aiovantage.controllers import StatusType
 from aiovantage.discovery import VantageControllerDetails
 from aiovantage.objects import (
@@ -36,8 +38,10 @@ import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 from pytest_homeassistant_custom_component.syrupy import HomeAssistantSnapshotExtension
 from syrupy.assertion import SnapshotAssertion
+from xsdata.formats.dataclass.models.generics import AnyElement
 
 from custom_components.vantage.const import DOMAIN
+from custom_components.vantage.module_status import ModuleStatus
 from homeassistant.const import CONF_HOST, CONF_PASSWORD, CONF_SSL, CONF_USERNAME
 from homeassistant.core import HomeAssistant
 
@@ -47,6 +51,7 @@ HOST = "192.168.1.100"
 SERIAL_NUMBER = 12345678
 USERNAME = "administrator"
 PASSWORD = "secret"
+ENCLOSURE_VID = 7
 
 
 @pytest.fixture(autouse=True)
@@ -430,7 +435,12 @@ def mock_vantage(supports_enhanced_log: bool) -> Generator[Vantage]:
         controller._objects.update((obj.vid, obj) for obj in objects)  # type: ignore
     vantage.thermostats._status_type = StatusType.OBJECT  # type: ignore
 
-    # Keep the event stream and its subscriptions off the network
+    # Neither the event stream nor the trigger and system log subscriptions touch the
+    # network, and Module 1 is on its bus
+    module_status = ModuleStatus(
+        modules={3: ModuleInfo(address=1, vid=3, errors=0)}, enclosures={1}
+    )
+
     with (
         patch("custom_components.vantage.Vantage", return_value=vantage),
         patch.object(vantage, "initialize"),
@@ -441,8 +451,34 @@ def mock_vantage(supports_enhanced_log: bool) -> Generator[Vantage]:
         ),
         patch.object(vantage.event_stream, "subscribe_triggers"),
         patch.object(vantage.event_stream, "subscribe_system_log"),
+        patch(
+            "custom_components.vantage.module_status.read_module_status",
+            return_value=module_status,
+        ),
     ):
         yield vantage
+
+
+@pytest.fixture
+def mock_enclosure(mock_vantage: Vantage) -> Generator[AsyncMock]:
+    """Mount Module 1 in an enclosure the integration doesn't load, second on master 1."""
+    mock_vantage.modules[3].parent = Parent(vid=ENCLOSURE_VID, position=1)
+    enclosure = SimpleNamespace(
+        vid=ENCLOSURE_VID,
+        obj=AnyElement(
+            qname="Enclosure",
+            children=[
+                AnyElement(qname="Name", text="Enclosure 2"),
+                AnyElement(qname="Parent", text="1", attributes={"Position": "2"}),
+            ],
+        ),
+    )
+
+    with patch(
+        "custom_components.vantage.names.ConfigurationInterface.get_object",
+        return_value=[enclosure],
+    ) as get_object:
+        yield get_object
 
 
 @pytest.fixture

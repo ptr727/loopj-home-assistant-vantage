@@ -112,6 +112,8 @@ def format_errors(errors: list[ReadError]) -> str:
     for error in errors:
         if "master" in error:
             where = f"master {error['master']}"
+        elif "enclosure" in error:
+            where = f"enclosure {error['enclosure']}"
         else:
             where = str(error["host"])
 

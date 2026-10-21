@@ -31,6 +31,7 @@ from .device import async_cleanup_devices, async_setup_devices
 from .entity import async_cleanup_entities
 from .events import async_setup_events
 from .migrate import async_migrate_data
+from .module_status import ModuleStatusCoordinator
 from .names import ObjectNames
 from .services import async_register_services
 from .system_log import async_setup_system_log
@@ -74,12 +75,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: VantageConfigEntry) -> b
     )
 
     # Store the client in the config entry's runtime data, with the name resolver for
-    # triggers and system logs
+    # triggers and the coordinator polling which modules respond on the bus
     names = ObjectNames(hass, entry, vantage)
     entry.runtime_data = VantageData(
         client=vantage,
         entry_id=entry.entry_id,
         object_names=names,
+        module_status=ModuleStatusCoordinator(hass, entry, vantage, names),
     )
 
     # Also stops lookups if setup fails, when Home Assistant runs the unload callbacks

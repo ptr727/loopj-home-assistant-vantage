@@ -17,10 +17,11 @@ MAX_PATH_DEPTH = 8
 
 
 class ObjectInfo(NamedTuple):
-    """The name of an object, and its parent."""
+    """The name of an object, and where it sits under its parent."""
 
     name: str
     parent: int | None
+    position: int | None
 
 
 class ObjectNames:
@@ -73,19 +74,23 @@ class ObjectNames:
         return (await self.info(vid)).name
 
     async def info(self, vid: int) -> ObjectInfo:
-        """Return the name and parent of an object."""
+        """Return the name, parent and position of an object."""
         # Objects the integration loaded, eg. buttons, sensors, modules and tasks
         if vid in self._vantage:
             obj = self._vantage[vid]
             parent = getattr(obj, "parent", None)
-            return ObjectInfo(obj.name or f"VID {vid}", getattr(parent, "vid", None))
+            return ObjectInfo(
+                obj.name or f"VID {vid}",
+                getattr(parent, "vid", None),
+                getattr(parent, "position", None),
+            )
 
         # Other objects, eg. timers and enclosures, fetched once and cached
         if (info := self._cache.get(vid)) is not None:
             return info
 
         if self.closed:
-            return ObjectInfo(f"VID {vid}", None)
+            return ObjectInfo(f"VID {vid}", None, None)
 
         # Share a lookup already in flight rather than asking the controller again
         if (pending := self._pending.get(vid)) is None:
@@ -107,7 +112,7 @@ class ObjectNames:
             # lookup cancel() stopped at unload
             if (task := asyncio.current_task()) is not None and task.cancelling():
                 raise
-            return ObjectInfo(f"VID {vid}", None)
+            return ObjectInfo(f"VID {vid}", None, None)
 
     def _lookup_done(self, vid: int, lookup: asyncio.Task[ObjectInfo]) -> None:
         self._lookups.discard(lookup)
@@ -124,7 +129,7 @@ class ObjectNames:
         except ClientError as err:
             # Not cached, so the next lookup tries again
             LOGGER.debug("Failed to look up object %d: %s", vid, err)
-            return ObjectInfo(f"VID {vid}", None)
+            return ObjectInfo(f"VID {vid}", None, None)
         except Exception:
             # aiovantage doesn't wrap decode or XML errors, which can also come from a
             # reply left over after a timeout, so retry next time as for a ClientError.
@@ -136,14 +141,14 @@ class ObjectNames:
                 LOGGER.warning(
                     "Failed to read object %d, naming it by VID", vid, exc_info=True
                 )
-            return ObjectInfo(f"VID {vid}", None)
+            return ObjectInfo(f"VID {vid}", None, None)
 
         # A reply left over after a timeout can describe another object. This guards an
         # aiovantage config connection desync that a pending aiovantage change fixes, so
         # it can go once the pinned aiovantage release carries that fix.
         if objects and objects[0].vid != vid:
             LOGGER.debug("Lookup of object %d returned object %d", vid, objects[0].vid)
-            return ObjectInfo(f"VID {vid}", None)
+            return ObjectInfo(f"VID {vid}", None, None)
 
         info = _object_info(vid, objects[0].obj if objects else None)
 
@@ -159,12 +164,18 @@ def _object_info(vid: int, obj: Any) -> ObjectInfo:
     if hasattr(obj, "children"):
         children = {child.qname: child for child in obj.children}
         name = getattr(children.get("Name"), "text", None)
-        parent = getattr(children.get("Parent"), "text", None)
-        return ObjectInfo(name or f"VID {vid}", _int(parent))
+        parent = children.get("Parent")
+        return ObjectInfo(
+            name or f"VID {vid}",
+            _int(getattr(parent, "text", None)),
+            _int(getattr(parent, "attributes", {}).get("Position")),
+        )
 
     parent = getattr(obj, "parent", None)
     return ObjectInfo(
-        getattr(obj, "name", None) or f"VID {vid}", getattr(parent, "vid", None)
+        getattr(obj, "name", None) or f"VID {vid}",
+        getattr(parent, "vid", None),
+        getattr(parent, "position", None),
     )
 
 

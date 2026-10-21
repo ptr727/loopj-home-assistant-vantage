@@ -3,11 +3,12 @@
 from collections.abc import Awaitable, Callable, Generator
 from dataclasses import replace
 from typing import Any, cast
-from unittest.mock import PropertyMock, patch
+from unittest.mock import AsyncMock, PropertyMock, patch
 
 from aiovantage import Vantage
 from aiovantage.config_client import (
     EventLogEntry,
+    ModuleInfo,
     SysLogEntry,
     SysLogType,
     TriggerType,
@@ -19,6 +20,7 @@ import voluptuous as vol
 
 from custom_components.vantage.const import (
     DOMAIN,
+    SERVICE_GET_MODULE_STATUS,
     SERVICE_GET_SYSTEM_LOG,
     SERVICE_GET_TRIGGER_HISTORY,
     SERVICE_START_TASK,
@@ -30,7 +32,7 @@ from homeassistant.const import ATTR_ID, ATTR_NAME
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 
-from .conftest import HOST
+from .conftest import ENCLOSURE_VID, HOST
 
 pytestmark = pytest.mark.usefixtures("init_integration")
 
@@ -291,11 +293,11 @@ def test_format_errors() -> None:
     assert (
         format_errors(
             [
-                {"host": "192.0.2.10", "master": 2, "error": "Timeout"},
+                {"host": "192.0.2.10", "enclosure": 7, "error": "Timeout"},
                 {"host": "192.0.2.11", "error": "ClientConnectionError"},
             ]
         )
-        == "192.0.2.10 master 2: Timeout; 192.0.2.11: ClientConnectionError"
+        == "192.0.2.10 enclosure 7: Timeout; 192.0.2.11: ClientConnectionError"
     )
 
 
@@ -326,7 +328,8 @@ async def test_get_trigger_history_unloaded(
 
 
 @pytest.mark.parametrize(
-    "service", [SERVICE_GET_TRIGGER_HISTORY, SERVICE_GET_SYSTEM_LOG]
+    "service",
+    [SERVICE_GET_TRIGGER_HISTORY, SERVICE_GET_SYSTEM_LOG, SERVICE_GET_MODULE_STATUS],
 )
 async def test_diagnostic_action_entry_not_loaded(
     hass: HomeAssistant,
@@ -341,3 +344,77 @@ async def test_diagnostic_action_entry_not_loaded(
         await hass.services.async_call(
             DOMAIN, service, blocking=True, return_response=True
         )
+
+
+@pytest.mark.usefixtures("mock_masters")
+async def test_get_module_status(
+    hass: HomeAssistant,
+    mock_vantage: Vantage,
+    mock_enclosure: AsyncMock,
+) -> None:
+    """Test reading the modules on each enclosure's bus."""
+    module = ModuleInfo(
+        address=1,
+        vid=3,
+        model="Module",
+        version="1.0",
+        status=ModuleInfo.Status(proc0="Running", proc1="Running"),
+        errors=2,
+    )
+
+    with patch(
+        "custom_components.vantage.module_status.DiagnosticInterface.get_modules",
+        return_value=[module, ModuleInfo(address=2)],
+    ) as get_modules:
+        response = await hass.services.async_call(
+            DOMAIN, SERVICE_GET_MODULE_STATUS, blocking=True, return_response=True
+        )
+
+    # The enclosure is addressed by its position, on the connected master
+    get_modules.assert_awaited_once_with(mock_vantage.config_client, 2, master=None)
+    assert response == {
+        "modules": [
+            {
+                "host": HOST,
+                "module_id": 3,
+                "module_name": "Module 1",
+                "online": True,
+                "address": 1,
+                "model": "Module",
+                "version": "1.0",
+                "status": ["Running", "Running"],
+                "errors": 2,
+            }
+        ],
+        "errors": [],
+    }
+
+
+@pytest.mark.usefixtures("mock_masters", "mock_enclosure")
+@pytest.mark.parametrize(
+    ("side_effect", "error"),
+    [
+        (ClientConnectionError(), "ClientConnectionError"),
+        (ValueError("Bad reply"), "Bad reply"),
+    ],
+)
+async def test_get_module_status_error(
+    hass: HomeAssistant,
+    side_effect: Exception,
+    error: str,
+) -> None:
+    """Test that an enclosure that can't be read is reported, its modules unknown."""
+    with patch(
+        "custom_components.vantage.module_status.DiagnosticInterface.get_modules",
+        side_effect=side_effect,
+    ):
+        response = await hass.services.async_call(
+            DOMAIN, SERVICE_GET_MODULE_STATUS, blocking=True, return_response=True
+        )
+
+    assert response
+    assert response["errors"] == [
+        {"host": HOST, "enclosure": ENCLOSURE_VID, "error": error}
+    ]
+    modules = cast(list[dict[str, Any]], response["modules"])
+    assert [module["online"] for module in modules] == [None]
