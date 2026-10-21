@@ -199,7 +199,7 @@ This event is fired when a Vantage task changes it's LED state. The following is
 
 ### `vantage_trigger`
 
-This event is fired each time an object triggers a task, and names the object that did, for example a keypad button, a timer, a sensor going out of range, or a module raising an alert. These are the live counterpart of the controller's trigger history, and each one is also shown in the logbook.
+This event is fired each time an object triggers a task, and names the object that did, for example a keypad button, a timer, a sensor going out of range, or a module raising an alert. These are the live counterpart of the controller's trigger history. Unlike `vantage_system_log`, they are not shown in the logbook.
 
 The following is an example of the payload for a power sensor going out of range:
 

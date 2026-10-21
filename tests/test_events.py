@@ -383,7 +383,7 @@ async def test_system_log_module_offline(
 
 
 async def test_logbook_descriptions(hass: HomeAssistant) -> None:
-    """Test that trigger and system log events are described in the logbook."""
+    """Test that system log events, and not trigger events, are described."""
     describers: dict[str, Callable[[Event[Any]], dict[str, str]]] = {}
 
     def describe_event(
@@ -394,36 +394,7 @@ async def test_logbook_descriptions(hass: HomeAssistant) -> None:
 
     async_describe_events(hass, describe_event)
 
-    trigger = describers[EVENT_TRIGGER](
-        Event(
-            EVENT_TRIGGER,
-            {
-                "trigger_type": "out_of_range",
-                "source_name": "Module Power",
-                "source_path": ["Module Power", "Module 1"],
-                "task_name": "Goodnight",
-            },
-        )
-    )
-    assert trigger == {
-        LOGBOOK_ENTRY_NAME: "Vantage",
-        LOGBOOK_ENTRY_MESSAGE: "Out of range: Module Power, Module 1 started Goodnight",
-    }
-
-    # An object with no path is described by its name
-    trigger = describers[EVENT_TRIGGER](
-        Event(
-            EVENT_TRIGGER,
-            {
-                "trigger_type": "timer",
-                "source_name": "VID 70",
-                "source_path": [],
-                "task_name": "Goodnight",
-            },
-        )
-    )
-    assert trigger[LOGBOOK_ENTRY_MESSAGE] == "Timer: VID 70 started Goodnight"
-
+    assert EVENT_TRIGGER not in describers
     system_log = describers[EVENT_SYSTEM_LOG](
         Event(EVENT_SYSTEM_LOG, {"type": "warning", "message": "Overload (VID:3)"})
     )
@@ -431,3 +402,9 @@ async def test_logbook_descriptions(hass: HomeAssistant) -> None:
         LOGBOOK_ENTRY_NAME: "Vantage",
         LOGBOOK_ENTRY_MESSAGE: "Warning: Overload (VID:3)",
     }
+
+    # Missing values are left out rather than rendered as "None"
+    system_log = describers[EVENT_SYSTEM_LOG](
+        Event(EVENT_SYSTEM_LOG, {"type": None, "message": "Overload"})
+    )
+    assert system_log[LOGBOOK_ENTRY_MESSAGE] == "Overload"
