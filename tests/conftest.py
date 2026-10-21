@@ -6,6 +6,7 @@ from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 
 from aiovantage import Vantage
+from aiovantage.config_client import ModuleInfo
 from aiovantage.controllers import StatusType
 from aiovantage.discovery import VantageControllerDetails
 from aiovantage.objects import (
@@ -38,6 +39,7 @@ from pytest_homeassistant_custom_component.syrupy import HomeAssistantSnapshotEx
 from syrupy.assertion import SnapshotAssertion
 
 from custom_components.vantage.const import DOMAIN
+from custom_components.vantage.module_status import ModuleStatus
 from homeassistant.const import CONF_HOST, CONF_PASSWORD, CONF_SSL, CONF_USERNAME
 from homeassistant.core import HomeAssistant
 
@@ -424,9 +426,24 @@ def mock_vantage() -> Generator[Vantage]:
         controller._objects.update((obj.vid, obj) for obj in objects)  # type: ignore
     vantage.thermostats._status_type = StatusType.OBJECT  # type: ignore
 
+    # The controller's firmware doesn't report the enhanced log, so no trigger or
+    # system log subscription opens the event stream, and Module 1 is on its bus
+    module_status = ModuleStatus(
+        modules={3: ModuleInfo(address=1, vid=3, errors=0)}, enclosures={1}
+    )
+
     with (
         patch("custom_components.vantage.Vantage", return_value=vantage),
         patch.object(vantage, "initialize"),
+        patch.object(
+            vantage.event_stream,
+            "start",
+            return_value=MagicMock(supports_enhanced_log=False),
+        ),
+        patch(
+            "custom_components.vantage.module_status.read_module_status",
+            return_value=module_status,
+        ),
     ):
         yield vantage
 
