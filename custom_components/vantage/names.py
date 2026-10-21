@@ -7,6 +7,9 @@ from aiovantage import Vantage
 from aiovantage.config_client import ConfigurationInterface
 from aiovantage.errors import ClientError
 
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.core import HomeAssistant
+
 from .const import LOGGER
 
 # Guards against a parent loop in the controller's configuration
@@ -24,8 +27,12 @@ class ObjectInfo(NamedTuple):
 class ObjectNames:
     """Resolve object names and parent chains, including objects not loaded."""
 
-    def __init__(self, vantage: Vantage) -> None:
+    def __init__(
+        self, hass: HomeAssistant, entry: ConfigEntry[Any], vantage: Vantage
+    ) -> None:
         """Initialize the resolver."""
+        self._hass = hass
+        self._entry = entry
         self._vantage = vantage
         self._cache: dict[int, ObjectInfo] = {}
         self._pending: dict[int, asyncio.Task[ObjectInfo]] = {}
@@ -81,7 +88,10 @@ class ObjectNames:
 
         # Share a lookup already in flight rather than asking the controller again
         if (pending := self._pending.get(vid)) is None:
-            pending = asyncio.ensure_future(self._fetch(vid))
+            # Tied to the entry, so Home Assistant tracks it and an unload cancels it
+            pending = self._entry.async_create_background_task(
+                self._hass, self._fetch(vid), f"vantage_object_name_{vid}"
+            )
             self._pending[vid] = pending
             pending.add_done_callback(lambda _: self._pending.pop(vid, None))
 

@@ -76,7 +76,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: VantageConfigEntry) -> b
 
     # Store the client in the config entry's runtime data, with the name resolver for
     # triggers and the coordinator polling which modules respond on the bus
-    names = ObjectNames(vantage)
+    names = ObjectNames(hass, entry, vantage)
     entry.runtime_data = VantageData(
         client=vantage,
         entry_id=entry.entry_id,

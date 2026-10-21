@@ -123,14 +123,6 @@ async def test_task_events(
     assert events[0].data == data
 
 
-async def async_wait_for_events(events: list[Event[Any]], count: int) -> None:
-    """Wait for the event workers, whose name lookups run outside tracked tasks."""
-    for _ in range(20):
-        if len(events) >= count:
-            return
-        await asyncio.sleep(0)
-
-
 def trigger_callback(vantage: Vantage) -> Callable[[TriggerReceived], None]:
     """Return the callback the integration subscribed to triggers with."""
     subscribe = cast(MagicMock, vantage.event_stream.subscribe_triggers)
@@ -192,7 +184,7 @@ async def test_trigger_event_unloaded_object(
             trigger_callback(mock_vantage)(
                 TriggerReceived(70, 60, TriggerType.TIMER, 0, 0)
             )
-            await async_wait_for_events(events, len(events) + 1)
+            await hass.async_block_till_done(wait_background_tasks=True)
 
     # Looked up once, then named from the cache
     get_object.assert_awaited_once()
@@ -228,7 +220,7 @@ async def test_trigger_events_in_order(
         assert not events
 
         answer.set()
-        await async_wait_for_events(events, 2)
+        await hass.async_block_till_done(wait_background_tasks=True)
 
     assert [event.data["source_name"] for event in events] == [
         "Sunset",
