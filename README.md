@@ -23,6 +23,8 @@ The features of this integration include:
 
 ## Prerequisites
 
+This integration supports Home Assistant versions from the last six months. If you run an older version, you can install an older release through HACS.
+
 If your Vantage controller requires authentication (most do by default) you'll need to know a username and password to continue.
 
 If you don't know your username and password, you can reset the password for the *administrator* user if you have physical access to the controller. When resetting your password, it will revert to the serial number of your controller. Alternatively, if you are working with a Vantage dealer, they can provide these credentials.
@@ -278,3 +280,12 @@ Returns the controller's system log, the same entries InFusion Diagnostics shows
 Returns each module known to the controllers, with `online` set to whether it responds on its enclosure bus (or null if its enclosure couldn't be read), and the address, model, firmware version, status bytes and error count of those that respond.
 
 Each of these services returns an `errors` list naming any controller that couldn't be read, by its `host`, and for the history and log any master that wasn't read, by its `master`. For the history and log, a peer master that answers with an error is skipped and the others are still read. Any other failure stops the reading, including an error answer from the connected master, a connection failure or a timeout, since the masters share one connection, and the masters after it are named as not read. For the module status, any enclosure that couldn't be read is named by its `enclosure`. The entries already returned are kept. A service fails when it returns no entries and something couldn't be read.
+
+## Removing the integration
+
+This integration follows standard integration removal. No extra steps are needed on the Vantage controller.
+
+- Go to [**Settings > Devices & Services**](https://my.home-assistant.io/redirect/integrations) and select **Vantage InFusion**.
+- Next to the controller entry, select the three dots menu, then select **Delete**.
+
+To remove the integration files as well, remove Vantage from HACS. If you installed it manually, delete the `config/custom_components/vantage` directory. Then restart Home Assistant.

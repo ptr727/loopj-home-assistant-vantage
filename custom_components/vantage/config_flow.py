@@ -1,6 +1,6 @@
 """Config flow for Vantage InFusion Controller integration."""
 
-from typing import Any, override
+from typing import TYPE_CHECKING, Any, override
 
 from aiovantage.discovery import (
     VantageControllerDetails,
@@ -10,7 +10,13 @@ from aiovantage.discovery import (
     validate_credentials,
 )
 from aiovantage.errors import ClientConnectionError
-import voluptuous as vol
+
+# Type check against probatio, which Home Assistant 2026.9.0 and later load as voluptuous
+# TODO: Import probatio directly once hacs.json requires Home Assistant 2026.9.0
+if TYPE_CHECKING:
+    import probatio as vol
+else:
+    import voluptuous as vol
 
 from homeassistant import config_entries
 from homeassistant.config_entries import ConfigFlowResult
@@ -18,7 +24,6 @@ from homeassistant.const import CONF_HOST, CONF_PASSWORD, CONF_SSL, CONF_USERNAM
 from homeassistant.helpers.service_info.zeroconf import ZeroconfServiceInfo
 from homeassistant.util.ssl import get_default_no_verify_context
 
-from .config_entry import VantageConfigEntry
 from .const import DOMAIN
 
 USER_SCHEMA = vol.Schema(
@@ -45,7 +50,6 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     controller: VantageControllerDetails | None = None
     username: str | None = None
     password: str | None = None
-    reauth_entry: VantageConfigEntry | None = None
 
     @override
     async def async_step_user(
@@ -195,48 +199,35 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self, _entry_data: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
         """Perform reauth after controller authentication error."""
-        if not (entry_id := self.context.get("entry_id")):
-            return self.async_abort(reason="unknown")
-
-        # TODO: Migrate to self._get_reauth_entry
-        self.reauth_entry = self.hass.config_entries.async_get_entry(entry_id)
-
         return await self.async_step_reauth_confirm()
 
     async def async_step_reauth_confirm(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
         """Dialog that informs the user that reauth is required."""
-        assert self.reauth_entry is not None
+        reauth_entry = self._get_reauth_entry()
 
         errors: dict[str, str] | None = None
-        suggestions: dict[str, str] = {
-            CONF_USERNAME: self.reauth_entry.data[CONF_USERNAME]
-        }
+        suggestions: dict[str, str] = {CONF_USERNAME: reauth_entry.data[CONF_USERNAME]}
 
         if user_input is not None:
             # Validate the credentials
             errors = await self._validate_credentials(
-                self.reauth_entry.data[CONF_HOST],
+                reauth_entry.data[CONF_HOST],
                 user_input[CONF_USERNAME],
                 user_input[CONF_PASSWORD],
-                self.reauth_entry.data.get(CONF_SSL, True),
+                reauth_entry.data.get(CONF_SSL, True),
             )
 
+            # Store the new credentials, reload the integration and finish the flow
             if not errors:
-                # Update the config entry with the new credentials
-                self.hass.config_entries.async_update_entry(
-                    self.reauth_entry,
-                    data={
-                        **self.reauth_entry.data,
+                return self.async_update_reload_and_abort(
+                    reauth_entry,
+                    data_updates={
                         CONF_USERNAME: user_input[CONF_USERNAME],
                         CONF_PASSWORD: user_input[CONF_PASSWORD],
                     },
                 )
-
-                # Reload the integration and finish the config flow
-                await self.hass.config_entries.async_reload(self.reauth_entry.entry_id)
-                return self.async_abort(reason="reauth_successful")
 
             # Pre-fill the username field with the previous input
             suggestions[CONF_USERNAME] = user_input[CONF_USERNAME]
@@ -247,8 +238,58 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             data_schema=self.add_suggested_values_to_schema(AUTH_SCHEMA, suggestions),
             errors=errors,
             description_placeholders={
-                "host": self.reauth_entry.data[CONF_HOST],
+                "host": reauth_entry.data[CONF_HOST],
             },
+        )
+
+    async def async_step_reconfigure(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Handle changing the host of the Vantage controller."""
+        reconfigure_entry = self._get_reconfigure_entry()
+
+        errors: dict[str, str] | None = None
+
+        if user_input is not None:
+            # Get information about the controller at the new host
+            controller = await get_controller_details(
+                user_input[CONF_HOST], ssl_context_factory=get_default_no_verify_context
+            )
+
+            # Look up its serial number with the stored credentials
+            serial_number = None
+            if controller is not None:
+                serial_number = await get_serial_from_controller(
+                    controller.host,
+                    reconfigure_entry.data.get(CONF_USERNAME),
+                    reconfigure_entry.data.get(CONF_PASSWORD),
+                    ssl=controller.supports_ssl,
+                    ssl_context_factory=get_default_no_verify_context,
+                )
+
+            if controller is None or serial_number is None:
+                errors = {"base": "cannot_connect"}
+            else:
+                # Abort if the new host is a different controller
+                await self.async_set_unique_id(str(serial_number))
+                self._abort_if_unique_id_mismatch()
+
+                # Store the new host, reload the integration and finish the flow
+                return self.async_update_reload_and_abort(
+                    reconfigure_entry,
+                    data_updates={
+                        CONF_HOST: controller.host,
+                        CONF_SSL: controller.supports_ssl,
+                    },
+                )
+
+        # Show the reconfigure form
+        return self.async_show_form(
+            step_id="reconfigure",
+            data_schema=self.add_suggested_values_to_schema(
+                USER_SCHEMA, user_input or reconfigure_entry.data
+            ),
+            errors=errors,
         )
 
     @staticmethod

@@ -4,23 +4,36 @@ build-backend = "hatchling.build"
 
 [project]
 name = "home-assistant-vantage"
-version = "0.15.2"
+version = "0.16.0b1"
 description = "Home Assistant integration for Vantage InFusion home automation controllers."
 readme = "README.md"
-requires-python = ">=3.13.2"
+requires-python = ">=3.14.2"
 authors = [{ name = "James Smith", email = "james@loopj.com" }]
 classifiers = ["Private :: Do Not Upload"]
 dependencies = [
-    "aiovantage==0.24.0.dev1",
-    "homeassistant==2026.1.1",
+    "aiovantage==0.24.0.dev2",
+    "homeassistant==2026.10.2",
     "colorlog==6.12.0",
 ]
 
 [project.optional-dependencies]
-dev = ["pyright==1.1.414", "ruff==0.16.10", "bumpver==2026.1132"]
+dev = [
+    "pyright==1.1.414",
+    "ruff==0.17.1",
+    "bumpver==2026.1132",
+    "pytest-homeassistant-custom-component==0.13.373",
+]
 
 [tool.hatch.build.targets.wheel]
 include = ["custom_components/vantage"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+# Stay compatible with the python 3.13 that older Home Assistant releases run on
+target-version = "py313"
 
 [tool.ruff.lint]
 select = [
@@ -71,13 +84,14 @@ known-first-party = ["homeassistant"]
 combine-as-imports = true
 
 [tool.pyright]
+include = ["custom_components"]
 typeCheckingMode = "strict"
 reportPrivateImportUsage = "none"
 reportIncompatibleVariableOverride = "none"
 reportUnnecessaryIsInstance = false
 
 [tool.bumpver]
-current_version = "0.15.2"
+current_version = "0.16.0b1"
 version_pattern = "MAJOR.MINOR.PATCH[PYTAGNUM]"
 commit_message = "Bump version {old_version} -> {new_version}"
 commit = true
@@ -91,4 +105,4 @@ push = true
 # The diagnostics work needs the unreleased aiovantage diagnostics branch, built from the fork.
 # Swap the source for { path = "../aiovantage", editable = true } to develop both together.
 [tool.uv.sources]
-aiovantage = { git = "https://github.com/ptr727/loopj-aiovantage.git", rev = "6a00c5cfddb46bcd67312385cc944f8ef926dc3a" }
+aiovantage = { git = "https://github.com/ptr727/loopj-aiovantage.git", rev = "1ec3fbd5108415f968cc01b2787e42057fd05d8b" }

@@ -18,6 +18,9 @@ from .config_entry import VantageConfigEntry
 from .entity import VantageEntity, add_entities_from_controller
 from .module_status import ModuleStatus, ModuleStatusCoordinator
 
+# Let aiovantage queue requests to the controller
+PARALLEL_UPDATES = 0
+
 
 async def async_setup_entry(
     hass: HomeAssistant,

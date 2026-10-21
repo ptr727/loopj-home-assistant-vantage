@@ -1,16 +1,24 @@
 """Handle Vantage service calls."""
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from aiovantage import Vantage
+from aiovantage.errors import ClientError
 from aiovantage.objects import Task
-import voluptuous as vol
+
+# Type check against probatio, which Home Assistant 2026.9.0 and later load as voluptuous
+# TODO: Import probatio directly once hacs.json requires Home Assistant 2026.9.0
+if TYPE_CHECKING:
+    import probatio as vol
+else:
+    import voluptuous as vol
 
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import ATTR_ID, ATTR_NAME
 from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 import homeassistant.helpers.config_validation as cv
 
-from .const import DOMAIN, LOGGER, SERVICE_START_TASK, SERVICE_STOP_TASK
+from .const import DOMAIN, SERVICE_START_TASK, SERVICE_STOP_TASK
 from .diagnostic_services import async_register_diagnostic_services
 
 TASK_SCHEMA = vol.All(
@@ -28,14 +36,12 @@ TASK_SCHEMA = vol.All(
 def async_register_services(hass: HomeAssistant) -> None:
     """Register services for Vantage integration."""
 
-    def find_task(id_or_name: Any) -> Task | None:
+    def find_task(id_or_name: Any) -> Task:
         # Build a query for the task
         if isinstance(id_or_name, int):
             query = {"vid": id_or_name}
-        elif isinstance(id_or_name, str):
-            query = {"name": id_or_name}
         else:
-            return None
+            query = {"name": id_or_name}
 
         # Search for the task in all loaded config entries
         for entry in hass.config_entries.async_entries(DOMAIN):
@@ -46,33 +52,45 @@ def async_register_services(hass: HomeAssistant) -> None:
             if task := vantage.tasks.get(**query):
                 return task
 
-        LOGGER.warning("Task '%s' not found in any Vantage controller", id_or_name)
-
-        return None
+        raise ServiceValidationError(
+            translation_domain=DOMAIN,
+            translation_key="task_not_found",
+            translation_placeholders={"task": str(id_or_name)},
+        )
 
     async def start_task(call: ServiceCall) -> None:
         """Start a Vantage task by id or name."""
-        task_id_or_name = call.data.get(ATTR_ID) or call.data.get(ATTR_NAME)
+        task = find_task(call.data.get(ATTR_ID) or call.data.get(ATTR_NAME))
 
-        if task := find_task(task_id_or_name):
+        try:
             await task.start()
+        except ClientError as err:
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="start_task_failed",
+                translation_placeholders={"task": task.name, "error": str(err)},
+            ) from err
 
     async def stop_task(call: ServiceCall) -> None:
         """Stop a Vantage task by id or name."""
-        task_id_or_name = call.data.get(ATTR_ID) or call.data.get(ATTR_NAME)
+        task = find_task(call.data.get(ATTR_ID) or call.data.get(ATTR_NAME))
 
-        if task := find_task(task_id_or_name):
+        try:
             await task.stop()
+        except ClientError as err:
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="stop_task_failed",
+                translation_placeholders={"task": task.name, "error": str(err)},
+            ) from err
 
     # Register services
-    if not hass.services.has_service(DOMAIN, SERVICE_START_TASK):
-        hass.services.async_register(
-            DOMAIN, SERVICE_START_TASK, start_task, schema=TASK_SCHEMA
-        )
+    hass.services.async_register(  # type: ignore
+        DOMAIN, SERVICE_START_TASK, start_task, schema=TASK_SCHEMA
+    )
 
-    if not hass.services.has_service(DOMAIN, SERVICE_STOP_TASK):
-        hass.services.async_register(
-            DOMAIN, SERVICE_STOP_TASK, stop_task, schema=TASK_SCHEMA
-        )
+    hass.services.async_register(  # type: ignore
+        DOMAIN, SERVICE_STOP_TASK, stop_task, schema=TASK_SCHEMA
+    )
 
     async_register_diagnostic_services(hass)
