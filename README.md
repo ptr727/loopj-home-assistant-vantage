@@ -257,6 +257,8 @@ Writing a program to the controller logs about a hundred warnings, so two kinds 
 | `object_id` | The Vantage ID of the first object the log names, when it names one. |
 | `object_name` | The name of the first object the log names, when it names one. |
 
+The `vantage_trigger` and `vantage_system_log` events need controller firmware with the enhanced log. To receive them, the integration enables the controller's `EVENT` and `SYSTEM` enhanced logs (`ELAGG` and `ELENABLE`) on the connected master and on each of its peers. This setting persists on the controller after Home Assistant disconnects.
+
 ## Services
 
 This integration exposes the following services which can be called from automations.
