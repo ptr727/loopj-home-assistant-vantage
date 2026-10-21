@@ -25,6 +25,7 @@ from custom_components.vantage.const import (
     SERVICE_START_TASK,
     SERVICE_STOP_TASK,
 )
+from custom_components.vantage.diagnostic_services import format_errors
 from custom_components.vantage.module_status import UNLOADED
 from homeassistant.const import ATTR_ID, ATTR_NAME
 from homeassistant.core import HomeAssistant
@@ -262,8 +263,27 @@ async def test_diagnostic_action_error(
         )
 
     # The connected master failed, so the peers were not read
-    assert "Connection refused" in str(err.value)
-    assert "Not read after master 1 failed" in str(err.value)
+    assert str(err.value) == (
+        f"{error_match}master 1: Connection refused; "
+        "master 2: Not read after master 1 failed; "
+        "master 3: Not read after master 1 failed"
+    )
+
+
+def test_format_errors() -> None:
+    """Test that errors read as text, naming the controller when several failed."""
+    assert format_errors([{"host": HOST, "master": 2, "error": "Timeout"}]) == (
+        "master 2: Timeout"
+    )
+    assert (
+        format_errors(
+            [
+                {"host": "192.0.2.10", "enclosure": 7, "error": "Timeout"},
+                {"host": "192.0.2.11", "error": "ClientConnectionError"},
+            ]
+        )
+        == "192.0.2.10 enclosure 7: Timeout; 192.0.2.11: ClientConnectionError"
+    )
 
 
 @pytest.mark.usefixtures("mock_masters")

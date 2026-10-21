@@ -134,7 +134,12 @@ class ModuleStatusCoordinator(DataUpdateCoordinator[ModuleStatus]):
             raise UpdateFailed(
                 translation_domain=DOMAIN,
                 translation_key="no_enclosure_read",
-                translation_placeholders={"errors": str(status.failed)},
+                translation_placeholders={
+                    "errors": "; ".join(
+                        f"enclosure {vid}: {error}"
+                        for vid, error in status.failed.items()
+                    )
+                },
             )
 
         return status

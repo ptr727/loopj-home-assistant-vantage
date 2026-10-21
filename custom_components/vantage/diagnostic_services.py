@@ -41,9 +41,12 @@ LOG_SCHEMA = vol.Schema(
     {vol.Optional(ATTR_LIMIT, default=100): vol.All(int, vol.Range(min=1))}
 )
 
+# What couldn't be read, eg. {"host": "192.0.2.10", "master": 2, "error": "Timeout"}
+type ReadError = dict[str, JsonValueType]
+
 # A reader returns what it read, and adds any master it couldn't read to the errors
 type EntryReader = Callable[
-    [VantageConfigEntry, ServiceCall, list[JsonValueType]],
+    [VantageConfigEntry, ServiceCall, list[ReadError]],
     Awaitable[list[JsonValueType]],
 ]
 
@@ -53,7 +56,7 @@ def _masters(vantage: Vantage) -> list[int | None]:
     return [None, *vantage.peers]
 
 
-def _master_error(vantage: Vantage, master: int | None, error: str) -> JsonValueType:
+def _master_error(vantage: Vantage, master: int | None, error: str) -> ReadError:
     return {
         "host": vantage.host,
         "master": master or vantage.master_number,
@@ -63,7 +66,7 @@ def _master_error(vantage: Vantage, master: int | None, error: str) -> JsonValue
 
 def _not_read(
     vantage: Vantage, masters: list[int | None], reason: str
-) -> list[JsonValueType]:
+) -> list[ReadError]:
     return [_master_error(vantage, master, reason) for master in masters]
 
 
@@ -72,7 +75,7 @@ def _read_failed(
     masters: list[int | None],
     index: int,
     err: Exception,
-    errors: list[JsonValueType],
+    errors: list[ReadError],
 ) -> bool:
     """Record a master that couldn't be read, and return whether to read the next."""
     errors.append(_master_error(vantage, masters[index], _error_text(err)))
@@ -95,13 +98,33 @@ def _read_failed(
     return False
 
 
+def format_errors(errors: list[ReadError]) -> str:
+    """Return errors as text, eg. "master 2: Timeout; master 3: Not read"."""
+    several_hosts = len({str(error["host"]) for error in errors}) > 1
+    parts: list[str] = []
+    for error in errors:
+        if "master" in error:
+            where = f"master {error['master']}"
+        elif "enclosure" in error:
+            where = f"enclosure {error['enclosure']}"
+        else:
+            where = str(error["host"])
+
+        # Name the controller too, when more than one couldn't be read
+        if several_hosts and where != error["host"]:
+            where = f"{error['host']} {where}"
+        parts.append(f"{where}: {error['error']}")
+
+    return "; ".join(parts)
+
+
 def _error_text(err: Exception) -> str:
     # A read timeout or a dropped connection carries no message
     return str(err) or type(err).__name__
 
 
 async def _trigger_history(
-    entry: VantageConfigEntry, call: ServiceCall, errors: list[JsonValueType]
+    entry: VantageConfigEntry, call: ServiceCall, errors: list[ReadError]
 ) -> list[JsonValueType]:
     # Captured once, since HA deletes runtime_data after an unload
     vantage = entry.runtime_data.client
@@ -148,7 +171,7 @@ async def _trigger_history(
 
 
 async def _system_log(
-    entry: VantageConfigEntry, call: ServiceCall, errors: list[JsonValueType]
+    entry: VantageConfigEntry, call: ServiceCall, errors: list[ReadError]
 ) -> list[JsonValueType]:
     # Captured once, since HA deletes runtime_data after an unload
     vantage = entry.runtime_data.client
@@ -188,7 +211,7 @@ async def _system_log(
 
 
 async def _module_status(
-    entry: VantageConfigEntry, call: ServiceCall, errors: list[JsonValueType]
+    entry: VantageConfigEntry, call: ServiceCall, errors: list[ReadError]
 ) -> list[JsonValueType]:
     vantage = entry.runtime_data.client
     status = await read_module_status(vantage, entry.runtime_data.object_names)
@@ -238,7 +261,7 @@ def async_register_diagnostic_services(hass: HomeAssistant) -> None:
                 )
 
             items: list[JsonValueType] = []
-            errors: list[JsonValueType] = []
+            errors: list[ReadError] = []
             for entry in entries:
                 host = entry.runtime_data.client.host
                 try:
@@ -256,10 +279,10 @@ def async_register_diagnostic_services(hass: HomeAssistant) -> None:
                 raise HomeAssistantError(
                     translation_domain=DOMAIN,
                     translation_key=failed_key,
-                    translation_placeholders={"errors": str(errors)},
+                    translation_placeholders={"errors": format_errors(errors)},
                 )
 
-            return {key: items, "errors": errors}
+            return {key: items, "errors": list[JsonValueType](errors)}
 
         return handler
 

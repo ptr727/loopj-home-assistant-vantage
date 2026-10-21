@@ -128,7 +128,9 @@ async def test_module_connectivity_unavailable(
 
     assert (state := hass.states.get("binary_sensor.module_1_connectivity"))
     assert state.state == STATE_UNAVAILABLE
-    assert "No enclosure could be read: {1: 'ClientConnectionError'}" in caplog.text
+    assert (
+        "No enclosure could be read: enclosure 1: ClientConnectionError" in caplog.text
+    )
 
 
 @pytest.mark.usefixtures("init_integration")
