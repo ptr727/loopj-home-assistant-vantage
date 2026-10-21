@@ -99,6 +99,8 @@ Vantage *Blind*, *BlindGroup*, *QISBlind*, *QubeBlind*, *RelayBlind*, *Somfy.RS-
 
 Vantage *DryContact* objects (motion sensors, etc) will appear as binary sensors in Home Assistant.
 
+Each Vantage controller gets a diagnostic connectivity binary sensor, eg. `binary_sensor.controller_1`, which turns off when the connection to the controller is lost. Unlike the other entities, which go unavailable while the controller is unreachable, it stays available, so an automation can wait on its `off` state.
+
 Each Vantage module (eg. SDM12, UDM08) also gets a diagnostic *Connectivity* binary sensor, eg. `binary_sensor.module_2_connectivity`, which turns off when the module stops responding on its enclosure bus, for example when the breaker feeding it trips. It is checked every 30 seconds, and at once when the controller logs a module going offline or online. Its `address` attribute is the module's position on the bus, and its `errors` attribute is the controller's error count for the module, which rises each time the module drops off the bus. While the module is off the bus both keep the last values the controller reported, so the count shows the latest drop once the module is back. Both are absent until the module has answered once since the integration was last loaded.
 
 ### Sensors
