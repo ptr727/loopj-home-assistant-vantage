@@ -12,6 +12,7 @@ from homeassistant.components.binary_sensor import (
 )
 from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers.entity import Entity
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
@@ -76,6 +77,13 @@ class VantageModuleConnectivityEntity(
 
     _attr_device_class = BinarySensorDeviceClass.CONNECTIVITY
     _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_translation_key = "connectivity"
+
+    # Named by Home Assistant from the translation key, after the module's device, so
+    # this reads "<module> Connectivity" in English. Restoring Entity's own name, rather
+    # than VantageEntity's, also lets Home Assistant build the entity ID from the English
+    # name whatever the user's language.
+    name = Entity.name  # pyright: ignore[reportAssignmentType, reportIncompatibleMethodOverride]
 
     # Kept while the module is off the bus, when the controller no longer lists it
     _last_info: ModuleInfo | None = None
@@ -95,13 +103,6 @@ class VantageModuleConnectivityEntity(
     @override
     def unique_id(self) -> str:
         return f"{self.obj.vid}:connectivity"
-
-    @property
-    @override
-    def name(self) -> str | None:
-        # Named by its translated device class, after the module's device, so this reads
-        # "<module> Connectivity" in English
-        return self._device_class_name
 
     @property
     @override

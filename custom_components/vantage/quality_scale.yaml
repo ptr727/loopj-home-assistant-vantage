@@ -59,7 +59,7 @@ rules:
   entity-disabled-by-default: done
   entity-translations:
     status: exempt
-    comment: Entity names come from the names of objects in the Vantage project, or from a translated device class.
+    comment: Entity names come from the names of objects in the Vantage project, except the module connectivity sensor, whose name is translated.
   exception-translations: done
   icon-translations: done
   reconfiguration-flow: done

@@ -65,6 +65,11 @@
     }
   },
   "entity": {
+    "binary_sensor": {
+      "connectivity": {
+        "name": "Connectivity"
+      }
+    },
     "climate": {
       "vantage": {
         "state_attributes": {
