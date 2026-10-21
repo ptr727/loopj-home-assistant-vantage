@@ -292,19 +292,23 @@ async def test_get_trigger_history_unloaded(
     get_event_log.assert_awaited_once()
 
 
+@pytest.mark.parametrize(
+    "service",
+    [SERVICE_GET_TRIGGER_HISTORY, SERVICE_GET_SYSTEM_LOG, SERVICE_GET_MODULE_STATUS],
+)
 async def test_diagnostic_action_entry_not_loaded(
     hass: HomeAssistant,
     mock_config_entry: MockConfigEntry,
+    service: str,
 ) -> None:
-    """Test that the actions skip a controller that is not loaded."""
+    """Test that the actions fail when no controller is loaded."""
     await hass.config_entries.async_unload(mock_config_entry.entry_id)
     await hass.async_block_till_done()
 
-    response = await hass.services.async_call(
-        DOMAIN, SERVICE_GET_MODULE_STATUS, blocking=True, return_response=True
-    )
-
-    assert response == {"modules": [], "errors": []}
+    with pytest.raises(ServiceValidationError, match="No Vantage controller is loaded"):
+        await hass.services.async_call(
+            DOMAIN, service, blocking=True, return_response=True
+        )
 
 
 @pytest.mark.usefixtures("mock_masters")

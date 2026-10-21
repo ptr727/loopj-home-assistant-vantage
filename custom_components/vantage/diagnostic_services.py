@@ -21,7 +21,7 @@ from homeassistant.core import (
     ServiceResponse,
     SupportsResponse,
 )
-from homeassistant.exceptions import HomeAssistantError
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.util.json import JsonValueType
 
 from .config_entry import VantageConfigEntry
@@ -227,11 +227,19 @@ def async_register_diagnostic_services(hass: HomeAssistant) -> None:
         key: str, read: EntryReader, failed_key: str
     ) -> Callable[[ServiceCall], Coroutine[Any, Any, ServiceResponse]]:
         async def handler(call: ServiceCall) -> ServiceResponse:
+            entries: list[VantageConfigEntry] = [
+                entry
+                for entry in hass.config_entries.async_entries(DOMAIN)
+                if entry.state is ConfigEntryState.LOADED
+            ]
+            if not entries:
+                raise ServiceValidationError(
+                    translation_domain=DOMAIN, translation_key="not_loaded"
+                )
+
             items: list[JsonValueType] = []
             errors: list[JsonValueType] = []
-            for entry in hass.config_entries.async_entries(DOMAIN):
-                if entry.state is not ConfigEntryState.LOADED:
-                    continue
+            for entry in entries:
                 host = entry.runtime_data.client.host
                 try:
                     items.extend(await read(entry, call, errors))

@@ -98,6 +98,9 @@
     "no_enclosure_read": {
       "message": "No enclosure could be read: {errors}"
     },
+    "not_loaded": {
+      "message": "No Vantage controller is loaded"
+    },
     "request_failed": {
       "message": "Request for {entity_id} failed: {error}"
     },
