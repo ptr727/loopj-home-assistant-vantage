@@ -264,6 +264,45 @@ def test_type_names(value: int | None, trigger_type: str, log_type: str) -> None
     assert log_type_name(value) == log_type
 
 
+async def test_names_cleared_during_lookup(
+    hass: HomeAssistant,
+    mock_vantage: Vantage,
+    mock_config_entry: MockConfigEntry,
+) -> None:
+    """Test that a lookup started before the names are cleared isn't cached."""
+    names = mock_config_entry.runtime_data.object_names
+    answer = asyncio.Event()
+    old = SimpleNamespace(vid=70, obj=SimpleNamespace(name="Sunset", parent=None))
+    new = SimpleNamespace(vid=70, obj=SimpleNamespace(name="Dusk", parent=None))
+    replies = [old, new]
+
+    async def lookup(*args: Any) -> list[Any]:
+        reply = replies.pop(0)
+        if reply is old:
+            await answer.wait()
+        return [reply]
+
+    with patch(
+        "custom_components.vantage.names.ConfigurationInterface.get_object",
+        side_effect=lookup,
+    ) as get_object:
+        # The controller is reprogrammed while the first lookup is in flight
+        first = hass.async_create_task(names.name(70))
+        await asyncio.sleep(0)
+        names.clear()
+
+        # A lookup after the clear doesn't share the one in flight
+        assert await names.name(70) == "Dusk"
+
+        # The first still answers its caller, but leaves the newer name cached
+        answer.set()
+        assert await first == "Sunset"
+        await hass.async_block_till_done(wait_background_tasks=True)
+        assert await names.name(70) == "Dusk"
+
+    assert get_object.await_count == 2
+
+
 async def test_no_enhanced_log(
     hass: HomeAssistant,
     mock_vantage: Vantage,

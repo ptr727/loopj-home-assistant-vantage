@@ -36,19 +36,25 @@ class ObjectNames:
         self._vantage = vantage
         self._cache: dict[int, ObjectInfo] = {}
         self._pending: dict[int, asyncio.Task[ObjectInfo]] = {}
+        self._lookups: set[asyncio.Task[ObjectInfo]] = set()
+        self._generation = 0
         self._warned: set[int] = set()
         self.closed = False
 
     def clear(self) -> None:
         """Forget looked up objects, eg. after the controller is reprogrammed."""
+        # A lookup already in flight may have read the old configuration, so it still
+        # answers its callers but is no longer shared, and its answer is not cached
+        self._generation += 1
+        self._pending.clear()
         self._cache.clear()
         self._warned.clear()
 
     def cancel(self) -> None:
         """Stop looking objects up, before the client closes, so none reopens it."""
         self.closed = True
-        for pending in self._pending.values():
-            pending.cancel()
+        for lookup in self._lookups:
+            lookup.cancel()
 
     async def path(self, vid: int) -> list[str]:
         """Return the names of an object and its parents, eg. sensor, module, enclosure."""
@@ -90,10 +96,13 @@ class ObjectNames:
         if (pending := self._pending.get(vid)) is None:
             # Tied to the entry, so Home Assistant tracks it and an unload cancels it
             pending = self._entry.async_create_background_task(
-                self._hass, self._fetch(vid), f"vantage_object_name_{vid}"
+                self._hass,
+                self._fetch(vid, self._generation),
+                f"vantage_object_name_{vid}",
             )
             self._pending[vid] = pending
-            pending.add_done_callback(lambda _: self._pending.pop(vid, None))
+            self._lookups.add(pending)
+            pending.add_done_callback(lambda done: self._lookup_done(vid, done))
 
         # Shielded, so a cancelled caller doesn't cancel the lookup the others share
         try:
@@ -105,7 +114,14 @@ class ObjectNames:
                 raise
             return ObjectInfo(f"VID {vid}", None, None)
 
-    async def _fetch(self, vid: int) -> ObjectInfo:
+    def _lookup_done(self, vid: int, lookup: asyncio.Task[ObjectInfo]) -> None:
+        self._lookups.discard(lookup)
+
+        # Unless clear() has since let a newer lookup of the same object take its place
+        if self._pending.get(vid) is lookup:
+            del self._pending[vid]
+
+    async def _fetch(self, vid: int, generation: int) -> ObjectInfo:
         try:
             objects = await ConfigurationInterface.get_object(
                 self._vantage.config_client, vid
@@ -127,14 +143,19 @@ class ObjectNames:
                 )
             return ObjectInfo(f"VID {vid}", None, None)
 
-        # A reply left over after a timeout can describe another object
+        # A reply left over after a timeout can describe another object. This guards an
+        # aiovantage config connection desync that a pending aiovantage change fixes, so
+        # it can go once the pinned aiovantage release carries that fix.
         if objects and objects[0].vid != vid:
             LOGGER.debug("Lookup of object %d returned object %d", vid, objects[0].vid)
             return ObjectInfo(f"VID {vid}", None, None)
 
-        self._warned.discard(vid)
         info = _object_info(vid, objects[0].obj if objects else None)
-        self._cache[vid] = info
+
+        # Cache only what was read since the last clear()
+        if generation == self._generation:
+            self._warned.discard(vid)
+            self._cache[vid] = info
         return info
 
 
