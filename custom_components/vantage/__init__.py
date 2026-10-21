@@ -26,11 +26,13 @@ from homeassistant.helpers.typing import ConfigType
 from homeassistant.util.ssl import get_default_no_verify_context
 
 from .config_entry import VantageConfigEntry, VantageData
-from .const import DOMAIN
+from .const import DOMAIN, LOGGER
 from .device import async_cleanup_devices, async_setup_devices
 from .entity import async_cleanup_entities
 from .events import async_setup_events
 from .migrate import async_migrate_data
+from .module_status import ModuleStatusCoordinator
+from .names import ObjectNames
 from .services import async_register_services
 from .system_log import async_setup_system_log
 from .triggers import async_setup_triggers
@@ -72,8 +74,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: VantageConfigEntry) -> b
         ssl_context_factory=get_default_no_verify_context,
     )
 
-    # Store the client in the config entry's runtime data
-    entry.runtime_data = VantageData(client=vantage, entry_id=entry.entry_id)
+    # Store the client in the config entry's runtime data, with the name resolver for
+    # triggers and the coordinator polling which modules respond on the bus
+    names = ObjectNames(hass, entry, vantage)
+    entry.runtime_data = VantageData(
+        client=vantage,
+        entry_id=entry.entry_id,
+        object_names=names,
+        module_status=ModuleStatusCoordinator(hass, entry, vantage, names),
+    )
+
+    # Also stops lookups if setup fails, when Home Assistant runs the unload callbacks
+    entry.async_on_unload(names.cancel)
 
     try:
         # Initialize and fetch all objects
@@ -83,10 +95,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: VantageConfigEntry) -> b
         await async_setup_devices(hass, entry)
 
         # Generate events naming the object that started each task, and for notable
-        # system logs, eg. a module losing power. Subscribed before the platforms are
-        # set up, so a connection failure here can retry setup from scratch.
-        await async_setup_triggers(hass, entry)
-        await async_setup_system_log(hass, entry)
+        # system logs, eg. a module losing power. Both are only streamed through the
+        # enhanced log, whose support is checked before the platforms are set up, so a
+        # connection failure here can retry setup from scratch.
+        if (await vantage.event_stream.start()).supports_enhanced_log:
+            async_setup_triggers(hass, entry)
+            async_setup_system_log(hass, entry)
+        else:
+            LOGGER.info(
+                "Controller firmware has no enhanced log, so no trigger or system log "
+                "events will fire"
+            )
 
         # Set up each platform (lights, covers, etc.)
         await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)

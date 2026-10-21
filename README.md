@@ -99,7 +99,7 @@ Vantage *Blind*, *BlindGroup*, *QISBlind*, *QubeBlind*, *RelayBlind*, *Somfy.RS-
 
 Vantage *DryContact* objects (motion sensors, etc) will appear as binary sensors in Home Assistant.
 
-Each Vantage module (eg. SDM12, UDM08) also gets a diagnostic *Connectivity* binary sensor, eg. `binary_sensor.module_2_connectivity`, which turns off when the module stops responding on its enclosure bus, for example when the breaker feeding it trips. It is checked every 30 seconds, and at once when the controller logs a module going offline or online. Its `address` attribute is the module's position on the bus, and its `errors` attribute is the controller's error count for the module, which rises each time the module drops off the bus. While the module is off the bus both keep the last values the controller reported, so the count shows the latest drop once the module is back. Both are absent until the module has answered once since the integration was last loaded.
+Each Vantage module (eg. SDM12, UDM08) also gets a diagnostic *Connectivity* binary sensor, eg. `binary_sensor.module_2_connectivity`, which turns off when the module stops responding on its enclosure bus, for example when the breaker feeding it trips. These sensors are disabled by default, so enable the ones you want. While any is enabled, the modules are checked every 60 seconds, and at once when the controller logs a module going offline or online. Its `address` attribute is the module's position on the bus, and its `errors` attribute is the controller's error count for the module, which rises each time the module drops off the bus. While the module is off the bus both keep the last values the controller reported, so the count shows the latest drop once the module is back. Both are absent until the module has answered once since the integration was last loaded.
 
 ### Sensors
 
@@ -199,7 +199,7 @@ This event is fired when a Vantage task changes it's LED state. The following is
 
 ### `vantage_trigger`
 
-This event is fired each time an object triggers a task, and names the object that did, for example a keypad button, a timer, a sensor going out of range, or a module raising an alert. These are the live counterpart of the controller's trigger history, and each one is also shown in the logbook.
+This event is fired each time an object triggers a task, and names the object that did, for example a keypad button, a timer, a sensor going out of range, or a module raising an alert. These are the live counterpart of the controller's trigger history. Unlike `vantage_system_log`, they are not shown in the logbook.
 
 The following is an example of the payload for a power sensor going out of range:
 
@@ -257,6 +257,8 @@ Writing a program to the controller logs about a hundred warnings, so two kinds 
 | `object_id` | The Vantage ID of the first object the log names, when it names one. |
 | `object_name` | The name of the first object the log names, when it names one. |
 
+The `vantage_trigger` and `vantage_system_log` events need controller firmware with the enhanced log. To receive them, the integration enables the controller's `EVENT` and `SYSTEM` enhanced logs (`ELAGG` and `ELENABLE`) on the connected master and on each of its peers. This setting persists on the controller after Home Assistant disconnects.
+
 ## Services
 
 This integration exposes the following services which can be called from automations.
@@ -271,7 +273,7 @@ You can stop a Vantage task by calling the `vantage.stop_task` service, with eit
 
 ### `vantage.get_trigger_history`
 
-Returns the controller's trigger history, the same entries InFusion Diagnostics shows in its History view, oldest first for each master. In a system with several masters, each master's entries follow the previous master's, and each configured Vantage integration's entries follow the previous one's, so the `master` and `host` attributes tell them apart. Each entry has the same attributes as the `vantage_trigger` event, plus the `time` it was recorded, in the controller's local time, and the `master` that recorded it. The optional `limit` caps the number of entries returned per master, newest kept, and defaults to 100.
+Returns the controller's trigger history, the same entries InFusion Diagnostics shows in its History view, oldest first for each master. In a system with several masters, each master's entries follow the previous master's, and each configured Vantage integration's entries follow the previous one's, so the `master` and `host` attributes tell them apart. Each entry has the same attributes as the `vantage_trigger` event, plus the `time` it was recorded, in the controller's local time, and the `master` that recorded it. The optional `limit`, from 1 to 5000, caps the number of entries returned per master, newest kept, and defaults to 100.
 
 ### `vantage.get_system_log`
 
@@ -281,7 +283,7 @@ Returns the controller's system log, the same entries InFusion Diagnostics shows
 
 Returns each module known to the controllers, with `online` set to whether it responds on its enclosure bus (or null if its enclosure couldn't be read), and the address, model, firmware version, status bytes and error count of those that respond.
 
-Each of these services returns an `errors` list naming any controller that couldn't be read, by its `host`, and for the history and log any master that wasn't read, by its `master`. For the history and log, a peer master that answers with an error is skipped and the others are still read. Any other failure stops the reading, including an error answer from the connected master, a connection failure or a timeout, since the masters share one connection, and the masters after it are named as not read. For the module status, any enclosure that couldn't be read is named by its `enclosure`. The entries already returned are kept. A service fails when it returns no entries and something couldn't be read.
+Each of these services returns an `errors` list naming any controller that couldn't be read, by its `host`, and for the history and log any master that wasn't read, by its `master`. For the history and log, a peer master that answers with an error is skipped and the others are still read. Any other failure stops the reading, including an error answer from the connected master, a connection failure or a timeout, since the masters share one connection, and the masters after it are named as not read. For the module status, any enclosure that couldn't be read is named by its `enclosure`. The entries already returned are kept. A service fails when no Vantage integration is loaded, or when it returns no entries and something couldn't be read.
 
 ## Removing the integration
 

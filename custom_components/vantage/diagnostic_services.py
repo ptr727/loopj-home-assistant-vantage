@@ -1,10 +1,10 @@
 """Services that read the controller's diagnostics, as InFusion Diagnostics shows them."""
 
-from collections.abc import Awaitable, Callable, Coroutine
-from typing import TYPE_CHECKING, Any
+from collections.abc import Awaitable, Callable
+from typing import TYPE_CHECKING
 
 from aiovantage import Vantage
-from aiovantage.config_client import DiagnosticInterface, SysLogType
+from aiovantage.config_client import DiagnosticInterface
 from aiovantage.errors import ClientResponseError
 
 # Type check against probatio, which Home Assistant 2026.9.0 and later load as voluptuous
@@ -21,30 +21,39 @@ from homeassistant.core import (
     ServiceResponse,
     SupportsResponse,
 )
-from homeassistant.exceptions import HomeAssistantError
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
+import homeassistant.helpers.config_validation as cv
 from homeassistant.util.json import JsonValueType
 
 from .config_entry import VantageConfigEntry
 from .const import (
     DOMAIN,
-    SERVICE_GET_MODULE_STATUS,
     SERVICE_GET_SYSTEM_LOG,
     SERVICE_GET_TRIGGER_HISTORY,
+    UNLOADED,
 )
-from .module_status import read_module_status
+from .system_log import log_type_name
 from .triggers import describe_trigger
 
 ATTR_LIMIT = "limit"
 
-UNLOADED = "Not read, the integration was unloaded"
+# The most entries returned per master, as services.yaml offers
+MAX_LIMIT = 5000
 
 LOG_SCHEMA = vol.Schema(
-    {vol.Optional(ATTR_LIMIT, default=100): vol.All(int, vol.Range(min=1))}
+    {
+        vol.Optional(ATTR_LIMIT, default=100): vol.All(
+            cv.positive_int, vol.Range(min=1, max=MAX_LIMIT)
+        )
+    }
 )
+
+# What couldn't be read, eg. {"host": "192.0.2.10", "master": 2, "error": "Timeout"}
+type ReadError = dict[str, JsonValueType]
 
 # A reader returns what it read, and adds any master it couldn't read to the errors
 type EntryReader = Callable[
-    [VantageConfigEntry, ServiceCall, list[JsonValueType]],
+    [VantageConfigEntry, ServiceCall, list[ReadError]],
     Awaitable[list[JsonValueType]],
 ]
 
@@ -54,7 +63,7 @@ def _masters(vantage: Vantage) -> list[int | None]:
     return [None, *vantage.peers]
 
 
-def _master_error(vantage: Vantage, master: int | None, error: str) -> JsonValueType:
+def _master_error(vantage: Vantage, master: int | None, error: str) -> ReadError:
     return {
         "host": vantage.host,
         "master": master or vantage.master_number,
@@ -64,7 +73,7 @@ def _master_error(vantage: Vantage, master: int | None, error: str) -> JsonValue
 
 def _not_read(
     vantage: Vantage, masters: list[int | None], reason: str
-) -> list[JsonValueType]:
+) -> list[ReadError]:
     return [_master_error(vantage, master, reason) for master in masters]
 
 
@@ -73,7 +82,7 @@ def _read_failed(
     masters: list[int | None],
     index: int,
     err: Exception,
-    errors: list[JsonValueType],
+    errors: list[ReadError],
 ) -> bool:
     """Record a master that couldn't be read, and return whether to read the next."""
     errors.append(_master_error(vantage, masters[index], _error_text(err)))
@@ -96,13 +105,33 @@ def _read_failed(
     return False
 
 
+def format_errors(errors: list[ReadError]) -> str:
+    """Return errors as text, eg. "master 2: Timeout; master 3: Not read"."""
+    several_hosts = len({str(error["host"]) for error in errors}) > 1
+    parts: list[str] = []
+    for error in errors:
+        if "master" in error:
+            where = f"master {error['master']}"
+        elif "enclosure" in error:
+            where = f"enclosure {error['enclosure']}"
+        else:
+            where = str(error["host"])
+
+        # Name the controller too, when more than one couldn't be read
+        if several_hosts and where != error["host"]:
+            where = f"{error['host']} {where}"
+        parts.append(f"{where}: {error['error']}")
+
+    return "; ".join(parts)
+
+
 def _error_text(err: Exception) -> str:
     # A read timeout or a dropped connection carries no message
     return str(err) or type(err).__name__
 
 
 async def _trigger_history(
-    entry: VantageConfigEntry, call: ServiceCall, errors: list[JsonValueType]
+    entry: VantageConfigEntry, call: ServiceCall, errors: list[ReadError]
 ) -> list[JsonValueType]:
     # Captured once, since HA deletes runtime_data after an unload
     vantage = entry.runtime_data.client
@@ -149,7 +178,7 @@ async def _trigger_history(
 
 
 async def _system_log(
-    entry: VantageConfigEntry, call: ServiceCall, errors: list[JsonValueType]
+    entry: VantageConfigEntry, call: ServiceCall, errors: list[ReadError]
 ) -> list[JsonValueType]:
     # Captured once, since HA deletes runtime_data after an unload
     vantage = entry.runtime_data.client
@@ -178,7 +207,7 @@ async def _system_log(
                 "time": item.time,
                 "host": vantage.host,
                 "master": master or vantage.master_number,
-                "type": _sys_log_type_name(item.log_type, item.type),
+                "type": log_type_name(item.type),
                 "source": item.src,
                 "message": (item.msg or "").strip(),
             }
@@ -188,95 +217,66 @@ async def _system_log(
     return entries
 
 
-async def _module_status(
-    entry: VantageConfigEntry, call: ServiceCall, errors: list[JsonValueType]
-) -> list[JsonValueType]:
-    vantage = entry.runtime_data.client
-    status = await read_module_status(entry)
-    errors.extend(
-        {"host": vantage.host, "enclosure": vid, "error": error}
-        for vid, error in status.failed.items()
+def async_register_response_service(
+    hass: HomeAssistant,
+    service: str,
+    schema: vol.Schema,
+    key: str,
+    read: EntryReader,
+    failed_key: str,
+) -> None:
+    """Register a response-only service, returning what each loaded entry read."""
+
+    async def handler(call: ServiceCall) -> ServiceResponse:
+        entries: list[VantageConfigEntry] = [
+            entry
+            for entry in hass.config_entries.async_entries(DOMAIN)
+            if entry.state is ConfigEntryState.LOADED
+        ]
+        if not entries:
+            raise ServiceValidationError(
+                translation_domain=DOMAIN, translation_key="not_loaded"
+            )
+
+        items: list[JsonValueType] = []
+        errors: list[ReadError] = []
+        for entry in entries:
+            host = entry.runtime_data.client.host
+            try:
+                items.extend(await read(entry, call, errors))
+            except Exception as err:
+                errors.append({"host": host, "error": _error_text(err)})
+
+        # Report what could be read, and only fail when nothing could
+        if errors and not items:
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key=failed_key,
+                translation_placeholders={"errors": format_errors(errors)},
+            )
+
+        return {key: items, "errors": list[JsonValueType](errors)}
+
+    hass.services.async_register(  # type: ignore
+        DOMAIN, service, handler, schema=schema, supports_response=SupportsResponse.ONLY
     )
-
-    modules: list[JsonValueType] = []
-    for module in vantage.modules:
-        info = status.modules.get(module.vid)
-        modules.append(
-            {
-                "host": vantage.host,
-                "module_id": module.vid,
-                "module_name": module.name,
-                # None when the module's enclosure couldn't be read
-                "online": status.is_online(module),
-                "address": info.address if info else None,
-                "model": info.model if info else None,
-                "version": info.version if info else None,
-                "status": [info.status.proc0, info.status.proc1]
-                if info and info.status
-                else None,
-                "errors": info.errors if info else None,
-            }
-        )
-
-    return modules
-
-
-def _sys_log_type_name(log_type: SysLogType | None, raw: int | None) -> str:
-    return log_type.name.lower() if log_type is not None else f"unknown_{raw}"
 
 
 def async_register_diagnostic_services(hass: HomeAssistant) -> None:
-    """Register the response-only services that read controller diagnostics."""
-
-    def response_service(
-        key: str, read: EntryReader, what: str
-    ) -> Callable[[ServiceCall], Coroutine[Any, Any, ServiceResponse]]:
-        async def handler(call: ServiceCall) -> ServiceResponse:
-            items: list[JsonValueType] = []
-            errors: list[JsonValueType] = []
-            for entry in hass.config_entries.async_entries(DOMAIN):
-                if entry.state is not ConfigEntryState.LOADED:
-                    continue
-                host = entry.runtime_data.client.host
-                try:
-                    items.extend(await read(entry, call, errors))
-                except Exception as err:
-                    errors.append(
-                        {
-                            "host": host,
-                            "error": _error_text(err),
-                        }
-                    )
-
-            # Report what could be read, and only fail when nothing could
-            if errors and not items:
-                raise HomeAssistantError(f"Failed to read {what}: {errors}")
-
-            return {key: items, "errors": errors}
-
-        return handler
-
-    for service, handler, schema in (
-        (
-            SERVICE_GET_TRIGGER_HISTORY,
-            response_service("entries", _trigger_history, "trigger history"),
-            LOG_SCHEMA,
-        ),
-        (
-            SERVICE_GET_SYSTEM_LOG,
-            response_service("entries", _system_log, "system log"),
-            LOG_SCHEMA,
-        ),
-        (
-            SERVICE_GET_MODULE_STATUS,
-            response_service("modules", _module_status, "module status"),
-            vol.Schema({}),
-        ),
-    ):
-        hass.services.async_register(  # type: ignore
-            DOMAIN,
-            service,
-            handler,
-            schema=schema,
-            supports_response=SupportsResponse.ONLY,
-        )
+    """Register the response-only services that read the controller's logs."""
+    async_register_response_service(
+        hass,
+        SERVICE_GET_TRIGGER_HISTORY,
+        LOG_SCHEMA,
+        "entries",
+        _trigger_history,
+        "get_trigger_history_failed",
+    )
+    async_register_response_service(
+        hass,
+        SERVICE_GET_SYSTEM_LOG,
+        LOG_SCHEMA,
+        "entries",
+        _system_log,
+        "get_system_log_failed",
+    )

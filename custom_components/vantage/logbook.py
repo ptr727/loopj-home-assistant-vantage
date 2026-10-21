@@ -9,7 +9,7 @@ from homeassistant.components.logbook import (
 )
 from homeassistant.core import Event, HomeAssistant, callback
 
-from .const import DOMAIN, EVENT_SYSTEM_LOG, EVENT_TRIGGER
+from .const import DOMAIN, EVENT_SYSTEM_LOG
 
 
 @callback
@@ -19,25 +19,16 @@ def async_describe_events(
         [str, str, Callable[[Event[Any]], dict[str, str]]], None
     ],
 ) -> None:
-    """Describe Vantage triggers, eg. "Out of range: Power Sensor - Line C, Module 3"."""
-
-    @callback
-    def describe_trigger(event: Event[Any]) -> dict[str, str]:
-        data = event.data
-        trigger = str(data.get("trigger_type", "")).replace("_", " ").capitalize()
-        source = ", ".join(data.get("source_path") or [str(data.get("source_name"))])
-        return {
-            LOGBOOK_ENTRY_NAME: "Vantage",
-            LOGBOOK_ENTRY_MESSAGE: f"{trigger}: {source} started {data.get('task_name')}",
-        }
+    """Describe notable system logs, eg. "Warning: Overload (VID:120)"."""
 
     @callback
     def describe_system_log(event: Event[Any]) -> dict[str, str]:
         data = event.data
+        log_type = str(data.get("type") or "").capitalize()
+        message = str(data.get("message") or "")
         return {
             LOGBOOK_ENTRY_NAME: "Vantage",
-            LOGBOOK_ENTRY_MESSAGE: f"{str(data.get('type', '')).capitalize()}: {data.get('message')}",
+            LOGBOOK_ENTRY_MESSAGE: f"{log_type}: {message}" if log_type else message,
         }
 
-    async_describe_event(DOMAIN, EVENT_TRIGGER, describe_trigger)
     async_describe_event(DOMAIN, EVENT_SYSTEM_LOG, describe_system_log)

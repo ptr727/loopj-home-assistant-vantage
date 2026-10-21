@@ -1,20 +1,25 @@
 """Track which modules respond on each controller's enclosure bus."""
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import timedelta
+from typing import Any, override
 
+from aiovantage import Vantage
 from aiovantage.config_client import DiagnosticInterface, ModuleInfo
 from aiovantage.errors import ClientError
 from aiovantage.objects import SystemObject
 
-from homeassistant.core import HomeAssistant
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
-from .config_entry import VantageConfigEntry
-from .const import LOGGER
+from .const import DOMAIN, LOGGER, UNLOADED
+from .names import ObjectNames
 
-# Polled as a fallback, "Module Offline/Online" system logs trigger a refresh at once
-MODULE_STATUS_INTERVAL = timedelta(seconds=30)
+# Polled as a fallback while a sensor listens, "Module Offline/Online" system logs
+# trigger a refresh at once
+MODULE_STATUS_INTERVAL = timedelta(seconds=60)
 
 
 @dataclass
@@ -43,11 +48,8 @@ def enclosure_vid(module: SystemObject) -> int | None:
     return getattr(getattr(module, "parent", None), "vid", None)
 
 
-async def read_module_status(entry: VantageConfigEntry) -> ModuleStatus:
+async def read_module_status(vantage: Vantage, names: ObjectNames) -> ModuleStatus:
     """Read the modules responding on the bus of each enclosure holding modules."""
-    vantage = entry.runtime_data.client
-    names = entry.runtime_data.object_names
-
     # Each enclosure is addressed by its position on its master
     enclosures: dict[int, int] = {}
     for module in vantage.modules:
@@ -56,12 +58,14 @@ async def read_module_status(entry: VantageConfigEntry) -> ModuleStatus:
 
     status = ModuleStatus()
     for vid, master in enclosures.items():
-        # The entry was unloaded mid-read, so don't reopen its closed client
+        number = (await names.info(vid)).position
+
+        # The entry was unloaded mid-read, so don't reopen its closed client. Checked
+        # after the lookup, which unload can land in or cancel, and right before the read.
         if names.closed:
-            status.failed[vid] = "Not read, the integration was unloaded"
+            status.failed[vid] = UNLOADED
             continue
 
-        number = (await names.info(vid)).position
         if number is None:
             LOGGER.debug("Enclosure %d has no position, skipping", vid)
             status.failed[vid] = "Enclosure position could not be read"
@@ -76,7 +80,9 @@ async def read_module_status(entry: VantageConfigEntry) -> ModuleStatus:
         except Exception as err:
             # aiovantage can also raise decode or XML errors that aren't a ClientError
             LOGGER.debug("Failed to read modules in enclosure %d: %s", vid, err)
-            status.failed[vid] = str(err) or type(err).__name__
+            status.failed[vid] = (
+                UNLOADED if names.closed else str(err) or type(err).__name__
+            )
             continue
 
         status.enclosures.add(vid)
@@ -88,12 +94,17 @@ async def read_module_status(entry: VantageConfigEntry) -> ModuleStatus:
 class ModuleStatusCoordinator(DataUpdateCoordinator[ModuleStatus]):
     """Poll the modules that respond on the bus.
 
-    A module missing from the bus has lost power, eg. its breaker tripped.
+    A module missing from the bus has lost power, eg. its breaker tripped. The bus is
+    only read while a connectivity sensor listens, and they're disabled by default.
     """
 
-    config_entry: VantageConfigEntry
-
-    def __init__(self, hass: HomeAssistant, entry: VantageConfigEntry) -> None:
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        entry: ConfigEntry[Any],
+        vantage: Vantage,
+        names: ObjectNames,
+    ) -> None:
         """Initialize the coordinator."""
         super().__init__(
             hass,
@@ -102,15 +113,60 @@ class ModuleStatusCoordinator(DataUpdateCoordinator[ModuleStatus]):
             name="Vantage module status",
             update_interval=MODULE_STATUS_INTERVAL,
         )
+        self._entry = entry
+        self._vantage = vantage
+        self._names = names
+
+        # No bus read yet, so every module's connectivity is unknown
+        self.data = ModuleStatus()
+
+    @callback
+    @override
+    def async_add_listener(
+        self, update_callback: CALLBACK_TYPE, context: Any = None
+    ) -> Callable[[], None]:
+        first = not self._listeners
+        remove = super().async_add_listener(update_callback, context)
+
+        # The first sensor enabled reads the bus at once, rather than at the first poll,
+        # without the debouncer's cooldown, so a module log soon after still refreshes
+        if first:
+            self._entry.async_create_background_task(
+                self.hass, self.async_refresh(), "vantage_module_status"
+            )
+
+        return remove
+
+    @callback
+    def async_refresh_if_listened(self) -> None:
+        """Refresh at once, but only while a sensor listens."""
+        if self._listeners:
+            self._entry.async_create_background_task(
+                self.hass, self.async_request_refresh(), "vantage_module_status"
+            )
 
     async def _async_update_data(self) -> ModuleStatus:
         try:
-            status = await read_module_status(self.config_entry)
+            status = await read_module_status(self._vantage, self._names)
         except ClientError as err:
-            raise UpdateFailed(f"Failed to read module status: {err}") from err
+            raise UpdateFailed(
+                translation_domain=DOMAIN,
+                translation_key="module_status_failed",
+                translation_placeholders={"error": str(err)},
+            ) from err
 
-        # Fail the update, as before, when no enclosure could be read at all
-        if status.failed and not status.enclosures:
-            raise UpdateFailed(f"No enclosure could be read: {status.failed}")
+        # Fail the update, as before, when no enclosure could be read at all, but not when
+        # the entry was unloaded mid-read, which is no failure worth an error
+        if status.failed and not status.enclosures and not self._names.closed:
+            raise UpdateFailed(
+                translation_domain=DOMAIN,
+                translation_key="no_enclosure_read",
+                translation_placeholders={
+                    "errors": "; ".join(
+                        f"enclosure {vid}: {error}"
+                        for vid, error in status.failed.items()
+                    )
+                },
+            )
 
         return status

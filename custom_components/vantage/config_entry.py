@@ -1,17 +1,14 @@
 """Vantage config entry."""
 
-from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from dataclasses import dataclass
 
 from homeassistant.config_entries import ConfigEntry
 
 from aiovantage import Vantage
 
 from .const import DOMAIN
+from .module_status import ModuleStatusCoordinator
 from .names import ObjectNames
-
-if TYPE_CHECKING:
-    from .module_status import ModuleStatusCoordinator
 
 type VantageConfigEntry = ConfigEntry[VantageData]
 
@@ -22,13 +19,9 @@ class VantageData:
 
     client: Vantage
     entry_id: str
+    object_names: ObjectNames
+    module_status: ModuleStatusCoordinator
     connected: bool = True
-    object_names: ObjectNames = field(init=False)
-    module_status: "ModuleStatusCoordinator | None" = None
-
-    def __post_init__(self) -> None:
-        """Create the name resolver for triggers."""
-        self.object_names = ObjectNames(self.client)
 
     @property
     def signal_connection_changed(self) -> str:
