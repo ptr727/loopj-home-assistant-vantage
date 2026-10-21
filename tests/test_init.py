@@ -44,6 +44,42 @@ async def test_load_unload_entry(
     mock_close.assert_called_once()
 
 
+async def test_unload_order(
+    hass: HomeAssistant,
+    mock_vantage: Vantage,
+    mock_config_entry: MockConfigEntry,
+) -> None:
+    """Test that unload stops the platforms, then the lookups, then the client."""
+    await setup_integration(hass, mock_config_entry)
+    names = mock_config_entry.runtime_data.object_names
+    unload_platforms = hass.config_entries.async_unload_platforms
+    cancel = names.cancel
+    calls: list[str] = []
+
+    async def record_unload_platforms(*args: Any) -> bool:
+        unloaded = await unload_platforms(*args)
+        calls.append("platforms")
+        return unloaded
+
+    def record_cancel() -> None:
+        calls.append("names")
+        cancel()
+
+    with (
+        patch.object(
+            hass.config_entries,
+            "async_unload_platforms",
+            side_effect=record_unload_platforms,
+        ),
+        patch.object(names, "cancel", side_effect=record_cancel),
+        patch.object(mock_vantage, "close", side_effect=lambda: calls.append("close")),
+    ):
+        assert await hass.config_entries.async_unload(mock_config_entry.entry_id)
+        await hass.async_block_till_done()
+
+    assert calls == ["platforms", "names", "close"]
+
+
 @pytest.mark.parametrize(
     ("exception", "state"),
     [
