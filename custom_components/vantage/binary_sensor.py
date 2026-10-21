@@ -4,7 +4,7 @@ from typing import Any, override
 
 from aiovantage.config_client import ModuleInfo
 from aiovantage.controllers import Controller
-from aiovantage.objects import DryContact, Master, SystemObject
+from aiovantage.objects import DryContact, SystemObject
 
 from homeassistant.components.binary_sensor import (
     BinarySensorDeviceClass,
@@ -33,11 +33,6 @@ async def async_setup_entry(
     # Add every dry contact as a binary sensor entity
     add_entities_from_controller(
         entry, async_add_entities, VantageBinarySensorEntity, vantage.dry_contacts
-    )
-
-    # Add a connectivity binary sensor for each controller
-    add_entities_from_controller(
-        entry, async_add_entities, VantageControllerConnectivityEntity, vantage.masters
     )
 
     # Add a connectivity binary sensor for each module, off when it drops off the bus
@@ -69,38 +64,6 @@ class VantageBinarySensorEntity(VantageEntity[DryContact], BinarySensorEntity):
     @override
     def is_on(self) -> bool | None:
         return self.obj.is_down
-
-
-class VantageControllerConnectivityEntity(VantageEntity[Master], BinarySensorEntity):
-    """Binary sensor reflecting the live connection to a Vantage controller.
-
-    Every other entity goes unavailable while the controller is unreachable. This one
-    stays available and reports `off`, so an alert can wait on a single state.
-    """
-
-    _attr_device_class = BinarySensorDeviceClass.CONNECTIVITY
-    _attr_entity_category = EntityCategory.DIAGNOSTIC
-
-    # Override the base "vantage" translation key so the name comes from the
-    # connectivity device class ("Connectivity").
-    _attr_translation_key = None
-
-    @property
-    @override
-    def unique_id(self) -> str:
-        return f"{self.obj.vid}:connectivity"
-
-    @property
-    @override
-    def available(self) -> bool:
-        # Ignore the connection state, which this entity reports rather than hides
-        return self._attr_available
-
-    @property
-    @override
-    def is_on(self) -> bool:
-        # The base entity writes the state each time the connection changes
-        return self.entry.runtime_data.connected
 
 
 class VantageModuleConnectivityEntity(VantageEntity[SystemObject], BinarySensorEntity):
