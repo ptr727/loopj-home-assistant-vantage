@@ -1,12 +1,14 @@
 """Tests for the Vantage InFusion binary sensor platform."""
 
 import asyncio
-from typing import Any
-from unittest.mock import AsyncMock, patch
+from collections.abc import Generator
+from typing import Any, cast
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from aiovantage import Vantage
-from aiovantage.config_client import ModuleInfo
+from aiovantage.config_client import ModuleInfo, SysLogType
 from aiovantage.errors import ClientConnectionError
+from aiovantage.events import SystemLogReceived
 import pytest
 from pytest_homeassistant_custom_component.common import (
     MockConfigEntry,
@@ -14,7 +16,7 @@ from pytest_homeassistant_custom_component.common import (
 )
 from syrupy.assertion import SnapshotAssertion
 
-from custom_components.vantage.const import UNLOADED
+from custom_components.vantage.const import DOMAIN, SERVICE_GET_MODULE_STATUS, UNLOADED
 from custom_components.vantage.module_status import ModuleStatus, read_module_status
 from custom_components.vantage.names import ObjectNames
 from homeassistant.const import (
@@ -27,6 +29,7 @@ from homeassistant.const import (
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 
+from . import setup_integration
 from .conftest import ENCLOSURE_VID
 
 
@@ -58,6 +61,79 @@ async def async_refresh_module_status(
     ):
         await coordinator.async_refresh()
     await hass.async_block_till_done()
+
+
+@pytest.fixture
+def mock_get_modules(
+    mock_vantage: Vantage, mock_enclosure: AsyncMock
+) -> Generator[AsyncMock]:
+    """Read the bus for real, where Module 1 answers, in place of the setup's status."""
+    with (
+        patch(
+            "custom_components.vantage.module_status.read_module_status",
+            side_effect=read_module_status,
+        ),
+        patch(
+            "custom_components.vantage.module_status.DiagnosticInterface.get_modules",
+            return_value=[ModuleInfo(address=1, vid=3, errors=0)],
+        ) as get_modules,
+    ):
+        yield get_modules
+
+
+async def async_log_module_offline(hass: HomeAssistant, vantage: Vantage) -> None:
+    """Pass the integration a system log of Module 1 dropping off the bus."""
+    subscribe = cast(MagicMock, vantage.event_stream.subscribe_system_log)
+    subscribe.call_args.args[0](
+        SystemLogReceived(SysLogType.INFORMATION, "Station", "Module Offline: 1.1 [3]")
+    )
+    await hass.async_block_till_done(wait_background_tasks=True)
+
+
+@pytest.mark.parametrize("supports_enhanced_log", [True])
+async def test_module_status_unread_while_disabled(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    mock_vantage: Vantage,
+    mock_get_modules: AsyncMock,
+) -> None:
+    """Test that no bus is read while every connectivity sensor is disabled."""
+    await setup_integration(hass, mock_config_entry)
+    await hass.async_block_till_done(wait_background_tasks=True)
+    mock_get_modules.assert_not_awaited()
+
+    # Nothing listens for a module going offline either
+    await async_log_module_offline(hass, mock_vantage)
+    mock_get_modules.assert_not_awaited()
+
+    # The action still reads the bus when asked
+    await hass.services.async_call(
+        DOMAIN, SERVICE_GET_MODULE_STATUS, blocking=True, return_response=True
+    )
+    mock_get_modules.assert_awaited_once()
+
+
+@pytest.mark.usefixtures("entity_registry_enabled_by_default")
+@pytest.mark.parametrize("supports_enhanced_log", [True])
+async def test_module_status_read_while_enabled(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    mock_vantage: Vantage,
+    mock_get_modules: AsyncMock,
+) -> None:
+    """Test that an enabled sensor reads the bus at setup and when a module drops off."""
+    entity_id = "binary_sensor.module_1_connectivity"
+    await setup_integration(hass, mock_config_entry)
+    await hass.async_block_till_done(wait_background_tasks=True)
+    mock_get_modules.assert_awaited_once()
+    assert (state := hass.states.get(entity_id))
+    assert state.state == STATE_ON
+
+    mock_get_modules.return_value = []
+    await async_log_module_offline(hass, mock_vantage)
+    assert mock_get_modules.await_count == 2
+    assert (state := hass.states.get(entity_id))
+    assert state.state == STATE_OFF
 
 
 @pytest.mark.usefixtures("init_integration")

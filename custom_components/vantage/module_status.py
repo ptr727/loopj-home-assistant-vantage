@@ -1,8 +1,9 @@
 """Track which modules respond on each controller's enclosure bus."""
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import timedelta
-from typing import Any
+from typing import Any, override
 
 from aiovantage import Vantage
 from aiovantage.config_client import DiagnosticInterface, ModuleInfo
@@ -10,13 +11,14 @@ from aiovantage.errors import ClientError
 from aiovantage.objects import SystemObject
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .const import DOMAIN, LOGGER, UNLOADED
 from .names import ObjectNames
 
-# Polled as a fallback, "Module Offline/Online" system logs trigger a refresh at once
+# Polled as a fallback while a sensor listens, "Module Offline/Online" system logs
+# trigger a refresh at once
 MODULE_STATUS_INTERVAL = timedelta(seconds=60)
 
 
@@ -92,7 +94,8 @@ async def read_module_status(vantage: Vantage, names: ObjectNames) -> ModuleStat
 class ModuleStatusCoordinator(DataUpdateCoordinator[ModuleStatus]):
     """Poll the modules that respond on the bus.
 
-    A module missing from the bus has lost power, eg. its breaker tripped.
+    A module missing from the bus has lost power, eg. its breaker tripped. The bus is
+    only read while a connectivity sensor listens, and they're disabled by default.
     """
 
     def __init__(
@@ -110,11 +113,37 @@ class ModuleStatusCoordinator(DataUpdateCoordinator[ModuleStatus]):
             name="Vantage module status",
             update_interval=MODULE_STATUS_INTERVAL,
         )
+        self._entry = entry
         self._vantage = vantage
         self._names = names
 
         # No bus read yet, so every module's connectivity is unknown
         self.data = ModuleStatus()
+
+    @callback
+    @override
+    def async_add_listener(
+        self, update_callback: CALLBACK_TYPE, context: Any = None
+    ) -> Callable[[], None]:
+        first = not self._listeners
+        remove = super().async_add_listener(update_callback, context)
+
+        # The first sensor enabled reads the bus at once, rather than at the first poll,
+        # without the debouncer's cooldown, so a module log soon after still refreshes
+        if first:
+            self._entry.async_create_background_task(
+                self.hass, self.async_refresh(), "vantage_module_status"
+            )
+
+        return remove
+
+    @callback
+    def async_refresh_if_listened(self) -> None:
+        """Refresh at once, but only while a sensor listens."""
+        if self._listeners:
+            self._entry.async_create_background_task(
+                self.hass, self.async_request_refresh(), "vantage_module_status"
+            )
 
     async def _async_update_data(self) -> ModuleStatus:
         try:

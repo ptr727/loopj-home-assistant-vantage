@@ -107,9 +107,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: VantageConfigEntry) -> b
                 "events will fire"
             )
 
-        # Read which modules respond on the bus, for the module connectivity sensors
-        await entry.runtime_data.module_status.async_refresh()
-
         # Set up each platform (lights, covers, etc.)
         await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 

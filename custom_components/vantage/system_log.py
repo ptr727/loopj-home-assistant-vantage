@@ -106,11 +106,7 @@ def async_setup_system_log(hass: HomeAssistant, entry: VantageConfigEntry) -> No
 
         # A module dropped off or rejoined the bus, refresh its connectivity now
         if MODULE_BUS_CHANGE.match(log.message):
-            entry.async_create_background_task(
-                hass,
-                entry.runtime_data.module_status.async_request_refresh(),
-                "vantage_module_status",
-            )
+            entry.runtime_data.module_status.async_refresh_if_listened()
 
         if is_noise(log, seen, time.monotonic()):
             return
