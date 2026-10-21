@@ -273,7 +273,7 @@ You can stop a Vantage task by calling the `vantage.stop_task` service, with eit
 
 ### `vantage.get_trigger_history`
 
-Returns the controller's trigger history, the same entries InFusion Diagnostics shows in its History view, oldest first for each master. In a system with several masters, each master's entries follow the previous master's, and each configured Vantage integration's entries follow the previous one's, so the `master` and `host` attributes tell them apart. Each entry has the same attributes as the `vantage_trigger` event, plus the `time` it was recorded, in the controller's local time, and the `master` that recorded it. The optional `limit` caps the number of entries returned per master, newest kept, and defaults to 100.
+Returns the controller's trigger history, the same entries InFusion Diagnostics shows in its History view, oldest first for each master. In a system with several masters, each master's entries follow the previous master's, and each configured Vantage integration's entries follow the previous one's, so the `master` and `host` attributes tell them apart. Each entry has the same attributes as the `vantage_trigger` event, plus the `time` it was recorded, in the controller's local time, and the `master` that recorded it. The optional `limit`, from 1 to 5000, caps the number of entries returned per master, newest kept, and defaults to 100.
 
 ### `vantage.get_system_log`
 

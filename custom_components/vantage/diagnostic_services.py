@@ -22,6 +22,7 @@ from homeassistant.core import (
     SupportsResponse,
 )
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
+import homeassistant.helpers.config_validation as cv
 from homeassistant.util.json import JsonValueType
 
 from .config_entry import VantageConfigEntry
@@ -37,8 +38,15 @@ from .triggers import describe_trigger
 
 ATTR_LIMIT = "limit"
 
+# The most entries returned per master, as services.yaml offers
+MAX_LIMIT = 5000
+
 LOG_SCHEMA = vol.Schema(
-    {vol.Optional(ATTR_LIMIT, default=100): vol.All(int, vol.Range(min=1))}
+    {
+        vol.Optional(ATTR_LIMIT, default=100): vol.All(
+            cv.positive_int, vol.Range(min=1, max=MAX_LIMIT)
+        )
+    }
 )
 
 # What couldn't be read, eg. {"host": "192.0.2.10", "master": 2, "error": "Timeout"}

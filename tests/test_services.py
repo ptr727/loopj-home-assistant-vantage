@@ -16,6 +16,7 @@ from aiovantage.config_client import (
 from aiovantage.errors import ClientConnectionError, ClientResponseError
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
+import voluptuous as vol
 
 from custom_components.vantage.const import (
     DOMAIN,
@@ -268,6 +269,20 @@ async def test_diagnostic_action_error(
         "master 2: Not read after master 1 failed; "
         "master 3: Not read after master 1 failed"
     )
+
+
+@pytest.mark.parametrize(
+    "service", [SERVICE_GET_TRIGGER_HISTORY, SERVICE_GET_SYSTEM_LOG]
+)
+@pytest.mark.parametrize("limit", [0, 5001, "many"])
+async def test_diagnostic_action_invalid_limit(
+    hass: HomeAssistant, service: str, limit: Any
+) -> None:
+    """Test that a limit outside the range services.yaml offers is rejected."""
+    with pytest.raises(vol.Invalid):
+        await hass.services.async_call(
+            DOMAIN, service, {"limit": limit}, blocking=True, return_response=True
+        )
 
 
 def test_format_errors() -> None:
