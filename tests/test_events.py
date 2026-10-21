@@ -203,6 +203,61 @@ async def test_trigger_event_unloaded_object(
         assert event.data["trigger_type"] == "timer"
 
 
+@pytest.mark.parametrize("supports_enhanced_log", [True])
+async def test_trigger_events_in_order(
+    hass: HomeAssistant,
+    mock_vantage: Vantage,
+) -> None:
+    """Test that triggers fire in order, though the first waits on a name lookup."""
+    events = async_capture_events(hass, EVENT_TRIGGER)
+    answer = asyncio.Event()
+    timer = SimpleNamespace(vid=70, obj=SimpleNamespace(name="Sunset", parent=None))
+
+    async def slow_lookup(*args: Any) -> list[Any]:
+        await answer.wait()
+        return [timer]
+
+    with patch(
+        "custom_components.vantage.names.ConfigurationInterface.get_object",
+        side_effect=slow_lookup,
+    ):
+        on_trigger = trigger_callback(mock_vantage)
+        on_trigger(TriggerReceived(70, 60, TriggerType.TIMER, 0, 0))
+        on_trigger(TriggerReceived(61, 60, TriggerType.BUTTON_DOWN, 0, 0))
+        await asyncio.sleep(0)
+        assert not events
+
+        answer.set()
+        await async_wait_for_events(events, 2)
+
+    assert [event.data["source_name"] for event in events] == [
+        "Sunset",
+        "Kitchen Button",
+    ]
+
+
+@pytest.mark.parametrize("supports_enhanced_log", [True])
+async def test_trigger_event_failure(
+    hass: HomeAssistant,
+    mock_vantage: Vantage,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Test that a trigger that can't be described doesn't stop later triggers."""
+    events = async_capture_events(hass, EVENT_TRIGGER)
+
+    with patch(
+        "custom_components.vantage.triggers.describe_trigger",
+        side_effect=[ValueError("Bad reply"), {"source_name": "Kitchen Button"}],
+    ):
+        on_trigger = trigger_callback(mock_vantage)
+        on_trigger(TriggerReceived(70, 60, TriggerType.TIMER, 0, 0))
+        on_trigger(TriggerReceived(61, 60, TriggerType.BUTTON_DOWN, 0, 0))
+        await hass.async_block_till_done(wait_background_tasks=True)
+
+    assert "Failed to handle TriggerReceived" in caplog.text
+    assert [event.data["source_name"] for event in events] == ["Kitchen Button"]
+
+
 @pytest.mark.parametrize(
     ("value", "trigger_type", "log_type"),
     [

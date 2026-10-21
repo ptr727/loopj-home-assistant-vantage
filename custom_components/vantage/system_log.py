@@ -1,6 +1,5 @@
 """Forward notable controller system logs, eg. a module losing power, to the event bus."""
 
-import asyncio
 import re
 import time
 
@@ -11,6 +10,7 @@ from homeassistant.core import HomeAssistant, callback
 
 from .config_entry import VantageConfigEntry
 from .const import EVENT_SYSTEM_LOG, LOGGER
+from .ordered import OrderedWorker
 
 # Routine information, eg. task and query completions, is too chatty to forward
 NOTABLE_TYPES = {SysLogType.WARNING, SysLogType.ERROR, SysLogType.FATAL}
@@ -76,30 +76,29 @@ def async_setup_system_log(hass: HomeAssistant, entry: VantageConfigEntry) -> No
     vantage = entry.runtime_data.client
     names = entry.runtime_data.object_names
 
-    # Fire in the order the controller logged, though some names need a lookup
-    queue: asyncio.Queue[SystemLogReceived] = asyncio.Queue()
     seen: dict[Shape, tuple[float, float]] = {}
 
-    async def fire_in_order() -> None:
-        while True:
-            log = await queue.get()
-            payload: dict[str, object] = {
-                "host": vantage.host,
-                "type": log_type_name(log.type),
-                "source": log.source,
-                "message": log.message,
-            }
-            if match := OBJECT_VID.search(log.message):
-                vid = int(match.group(1) or match.group(2))
-                # One bad log must not stop the worker, or no later log would fire
-                try:
-                    name = await names.name(vid)
-                except Exception:
-                    LOGGER.exception("Failed to name VID %d in a system log", vid)
-                    name = f"VID {vid}"
-                payload |= {"object_id": vid, "object_name": name}
+    async def fire(log: SystemLogReceived) -> None:
+        payload: dict[str, object] = {
+            "host": vantage.host,
+            "type": log_type_name(log.type),
+            "source": log.source,
+            "message": log.message,
+        }
+        if match := OBJECT_VID.search(log.message):
+            vid = int(match.group(1) or match.group(2))
+            # Still fire the log when its object can't be named
+            try:
+                name = await names.name(vid)
+            except Exception:
+                LOGGER.exception("Failed to name VID %d in a system log", vid)
+                name = f"VID {vid}"
+            payload |= {"object_id": vid, "object_name": name}
 
-            hass.bus.async_fire(EVENT_SYSTEM_LOG, payload)
+        hass.bus.async_fire(EVENT_SYSTEM_LOG, payload)
+
+    # Fire in the order the controller logged, though some names need a lookup
+    worker = OrderedWorker(hass, entry, fire, "vantage_system_log")
 
     def on_system_log(log: SystemLogReceived) -> None:
         if not is_notable(log):
@@ -116,9 +115,8 @@ def async_setup_system_log(hass: HomeAssistant, entry: VantageConfigEntry) -> No
         if is_noise(log, seen, time.monotonic()):
             return
 
-        queue.put_nowait(log)
+        worker.put(log)
 
-    entry.async_create_background_task(hass, fire_in_order(), "vantage_system_log")
     entry.async_on_unload(
         vantage.event_stream.subscribe_system_log(on_system_log, peers=vantage.peers)
     )
