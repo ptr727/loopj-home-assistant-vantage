@@ -31,6 +31,8 @@ from .device import async_cleanup_devices, async_setup_devices
 from .entity import async_cleanup_entities
 from .events import async_setup_events
 from .migrate import async_migrate_data
+from .module_status import ModuleStatusCoordinator
+from .names import ObjectNames
 from .services import async_register_services
 from .system_log import async_setup_system_log
 from .triggers import async_setup_triggers
@@ -72,8 +74,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: VantageConfigEntry) -> b
         ssl_context_factory=get_default_no_verify_context,
     )
 
-    # Store the client in the config entry's runtime data
-    entry.runtime_data = VantageData(client=vantage, entry_id=entry.entry_id)
+    # Store the client in the config entry's runtime data, with the name resolver for
+    # triggers and the coordinator polling which modules respond on the bus
+    names = ObjectNames(vantage)
+    entry.runtime_data = VantageData(
+        client=vantage,
+        entry_id=entry.entry_id,
+        object_names=names,
+        module_status=ModuleStatusCoordinator(hass, entry, vantage, names),
+    )
 
     try:
         # Initialize and fetch all objects
@@ -94,6 +103,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: VantageConfigEntry) -> b
                 "Controller firmware has no enhanced log, so no trigger or system log "
                 "events will fire"
             )
+
+        # Read which modules respond on the bus, for the module connectivity sensors
+        await entry.runtime_data.module_status.async_refresh()
 
         # Set up each platform (lights, covers, etc.)
         await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)

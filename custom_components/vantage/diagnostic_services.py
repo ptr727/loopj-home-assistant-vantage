@@ -191,7 +191,7 @@ async def _module_status(
     entry: VantageConfigEntry, call: ServiceCall, errors: list[JsonValueType]
 ) -> list[JsonValueType]:
     vantage = entry.runtime_data.client
-    status = await read_module_status(entry)
+    status = await read_module_status(vantage, entry.runtime_data.object_names)
     errors.extend(
         {"host": vantage.host, "enclosure": vid, "error": error}
         for vid, error in status.failed.items()

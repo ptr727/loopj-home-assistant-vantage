@@ -2,16 +2,19 @@
 
 from dataclasses import dataclass, field
 from datetime import timedelta
+from typing import Any
 
+from aiovantage import Vantage
 from aiovantage.config_client import DiagnosticInterface, ModuleInfo
 from aiovantage.errors import ClientError
 from aiovantage.objects import SystemObject
 
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
-from .config_entry import VantageConfigEntry
 from .const import DOMAIN, LOGGER
+from .names import ObjectNames
 
 # Polled as a fallback, "Module Offline/Online" system logs trigger a refresh at once
 MODULE_STATUS_INTERVAL = timedelta(seconds=30)
@@ -45,11 +48,8 @@ def enclosure_vid(module: SystemObject) -> int | None:
     return getattr(getattr(module, "parent", None), "vid", None)
 
 
-async def read_module_status(entry: VantageConfigEntry) -> ModuleStatus:
+async def read_module_status(vantage: Vantage, names: ObjectNames) -> ModuleStatus:
     """Read the modules responding on the bus of each enclosure holding modules."""
-    vantage = entry.runtime_data.client
-    names = entry.runtime_data.object_names
-
     # Each enclosure is addressed by its position on its master
     enclosures: dict[int, int] = {}
     for module in vantage.modules:
@@ -97,9 +97,13 @@ class ModuleStatusCoordinator(DataUpdateCoordinator[ModuleStatus]):
     A module missing from the bus has lost power, eg. its breaker tripped.
     """
 
-    config_entry: VantageConfigEntry
-
-    def __init__(self, hass: HomeAssistant, entry: VantageConfigEntry) -> None:
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        entry: ConfigEntry[Any],
+        vantage: Vantage,
+        names: ObjectNames,
+    ) -> None:
         """Initialize the coordinator."""
         super().__init__(
             hass,
@@ -108,12 +112,15 @@ class ModuleStatusCoordinator(DataUpdateCoordinator[ModuleStatus]):
             name="Vantage module status",
             update_interval=MODULE_STATUS_INTERVAL,
         )
+        self._vantage = vantage
+        self._names = names
+
+        # No bus read yet, so every module's connectivity is unknown
+        self.data = ModuleStatus()
 
     async def _async_update_data(self) -> ModuleStatus:
-        # Captured first, since HA deletes runtime_data after an unload
-        names = self.config_entry.runtime_data.object_names
         try:
-            status = await read_module_status(self.config_entry)
+            status = await read_module_status(self._vantage, self._names)
         except ClientError as err:
             raise UpdateFailed(
                 translation_domain=DOMAIN,
@@ -123,7 +130,7 @@ class ModuleStatusCoordinator(DataUpdateCoordinator[ModuleStatus]):
 
         # Fail the update, as before, when no enclosure could be read at all, but not when
         # the entry was unloaded mid-read, which is no failure worth an error
-        if status.failed and not status.enclosures and not names.closed:
+        if status.failed and not status.enclosures and not self._names.closed:
             raise UpdateFailed(
                 translation_domain=DOMAIN,
                 translation_key="no_enclosure_read",

@@ -4,6 +4,7 @@ import asyncio
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
+from aiovantage import Vantage
 from aiovantage.config_client import ModuleInfo
 from aiovantage.errors import ClientConnectionError
 import pytest
@@ -18,6 +19,7 @@ from custom_components.vantage.module_status import (
     ModuleStatus,
     read_module_status,
 )
+from custom_components.vantage.names import ObjectNames
 from homeassistant.const import (
     STATE_OFF,
     STATE_ON,
@@ -29,6 +31,11 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 
 from .conftest import ENCLOSURE_VID
+
+
+def client_and_names(entry: MockConfigEntry) -> tuple[Vantage, ObjectNames]:
+    """Return the client and name resolver the module status is read with."""
+    return entry.runtime_data.client, entry.runtime_data.object_names
 
 
 @pytest.mark.parametrize("init_integration", [Platform.BINARY_SENSOR], indirect=True)
@@ -48,7 +55,6 @@ async def async_refresh_module_status(
 ) -> None:
     """Refresh the module status coordinator, reading the given status."""
     coordinator = entry.runtime_data.module_status
-    assert coordinator
     with patch(
         "custom_components.vantage.module_status.read_module_status",
         return_value=status,
@@ -123,7 +129,6 @@ async def test_module_status_refresh_at_unload(
 ) -> None:
     """Test that a refresh the unload interrupts doesn't fail or log an error."""
     coordinator = mock_config_entry.runtime_data.module_status
-    assert coordinator
     mock_config_entry.runtime_data.object_names.cancel()
 
     await async_refresh_module_status(
@@ -151,7 +156,7 @@ async def test_read_module_status_unload_after_lookup(
     with patch(
         "custom_components.vantage.module_status.DiagnosticInterface.get_modules"
     ) as get_modules:
-        status = await read_module_status(mock_config_entry)
+        status = await read_module_status(*client_and_names(mock_config_entry))
 
     get_modules.assert_not_awaited()
     assert status.failed == {ENCLOSURE_VID: UNLOADED}
@@ -174,7 +179,9 @@ async def test_read_module_status_lookup_cancelled(
     with patch(
         "custom_components.vantage.module_status.DiagnosticInterface.get_modules"
     ) as get_modules:
-        read = asyncio.ensure_future(read_module_status(mock_config_entry))
+        read = asyncio.ensure_future(
+            read_module_status(*client_and_names(mock_config_entry))
+        )
         await looking_up.wait()
         names.cancel()
         status = await read
@@ -198,6 +205,6 @@ async def test_read_module_status_read_interrupted(
         "custom_components.vantage.module_status.DiagnosticInterface.get_modules",
         side_effect=unload_during_read,
     ):
-        status = await read_module_status(mock_config_entry)
+        status = await read_module_status(*client_and_names(mock_config_entry))
 
     assert status.failed == {ENCLOSURE_VID: UNLOADED}
