@@ -18,6 +18,8 @@ EVENT_BUTTON_RELEASED = f"{DOMAIN}_button_released"
 EVENT_TASK_STARTED = f"{DOMAIN}_task_started"
 EVENT_TASK_STOPPED = f"{DOMAIN}_task_stopped"
 EVENT_TASK_STATE_CHANGED = f"{DOMAIN}_task_state_changed"
+EVENT_TRIGGER = f"{DOMAIN}_trigger"
+EVENT_SYSTEM_LOG = f"{DOMAIN}_system_log"
 
 # Climate constants
 FAN_MAX = "max"

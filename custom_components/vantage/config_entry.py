@@ -7,6 +7,7 @@ from homeassistant.config_entries import ConfigEntry
 from aiovantage import Vantage
 
 from .const import DOMAIN
+from .names import ObjectNames
 
 type VantageConfigEntry = ConfigEntry[VantageData]
 
@@ -17,6 +18,7 @@ class VantageData:
 
     client: Vantage
     entry_id: str
+    object_names: ObjectNames
     connected: bool = True
 
     @property

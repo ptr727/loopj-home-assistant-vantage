@@ -195,6 +195,68 @@ This event is fired when a Vantage task changes it's LED state. The following is
 | `task_name` | The name of the task that changed state. |
 | `task_state` | The new LED state of the task. |
 
+### `vantage_trigger`
+
+This event is fired each time an object triggers a task, and names the object that did, for example a keypad button, a timer, a sensor going out of range, or a module raising an alert. These are the live counterpart of the controller's trigger history. Unlike `vantage_system_log`, they are not shown in the logbook.
+
+The following is an example of the payload for a power sensor going out of range:
+
+```json
+{
+    "host": "192.0.2.10",
+    "trigger_type": "out_of_range",
+    "event": 7,
+    "source_id": 120,
+    "source_name": "Power Sensor - Line A",
+    "source_path": ["Power Sensor - Line A", "Module 2", "Enclosure 1", "Controller 1"],
+    "task_id": 300,
+    "task_name": "Range Fault Alert",
+    "param1": 0,
+    "param2": 0
+}
+```
+
+| Attribute | Description |
+| --- | --- |
+| `host` | The host of the controller that reported the trigger. |
+| `trigger_type` | The type of trigger, eg. `button_down`, `button_up`, `button_hold`, `timer`, `in_range`, `out_of_range`, or `module_alert`. |
+| `event` | The controller's numeric code for the trigger type. |
+| `source_id` | The Vantage ID of the object that triggered the task. |
+| `source_name` | The name of the object that triggered the task. |
+| `source_path` | The names of the object and its parents, eg. a sensor, its module, enclosure and controller. |
+| `task_id` | The Vantage ID of the task that was started. |
+| `task_name` | The name of the task that was started. |
+| `param1` | The first trigger parameter, eg. `2` for the second press of a double press, or the line feed of a module alert. |
+| `param2` | The second trigger parameter. |
+
+### `vantage_system_log`
+
+This event is fired for notable entries in the controller's system log: warnings, errors, and modules going offline or coming back online. Each one is also shown in the logbook.
+
+Writing a program to the controller logs about a hundred warnings, so two kinds are left out. Script compiler warnings are dropped, though compiler errors are kept. A warning that repeats within a minute with the same wording, apart from its numbers, fires once, and again every hour while the repeats continue. A warning naming any different object by its Vantage ID is not a repeat. `[ALERT]` warnings and module messages always fire. The following is an example of the payload:
+
+```json
+{
+    "host": "192.0.2.10",
+    "type": "warning",
+    "source": "Controller",
+    "message": "[ALERT] Module 'Module 2' (VID:110) detected missing line feed 1",
+    "object_id": 110,
+    "object_name": "Module 2"
+}
+```
+
+| Attribute | Description |
+| --- | --- |
+| `host` | The host of the controller that logged the entry. |
+| `type` | The log type, eg. `information`, `warning`, `error`. |
+| `source` | The source of the log, eg. `Controller`. |
+| `message` | The log message. |
+| `object_id` | The Vantage ID of the first object the log names, when it names one. |
+| `object_name` | The name of the first object the log names, when it names one. |
+
+The `vantage_trigger` and `vantage_system_log` events need controller firmware with the enhanced log. To receive them, the integration enables the controller's `EVENT` and `SYSTEM` enhanced logs (`ELAGG` and `ELENABLE`) on the connected master and on each of its peers. This setting persists on the controller after Home Assistant disconnects.
+
 ## Services
 
 This integration exposes the following services which can be called from automations.

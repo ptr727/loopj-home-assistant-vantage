@@ -26,12 +26,15 @@ from homeassistant.helpers.typing import ConfigType
 from homeassistant.util.ssl import get_default_no_verify_context
 
 from .config_entry import VantageConfigEntry, VantageData
-from .const import DOMAIN
+from .const import DOMAIN, LOGGER
 from .device import async_cleanup_devices, async_setup_devices
 from .entity import async_cleanup_entities
 from .events import async_setup_events
 from .migrate import async_migrate_data
+from .names import ObjectNames
 from .services import async_register_services
+from .system_log import async_setup_system_log
+from .triggers import async_setup_triggers
 
 PLATFORMS: list[Platform] = [
     Platform.BINARY_SENSOR,
@@ -70,8 +73,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: VantageConfigEntry) -> b
         ssl_context_factory=get_default_no_verify_context,
     )
 
-    # Store the client in the config entry's runtime data
-    entry.runtime_data = VantageData(client=vantage, entry_id=entry.entry_id)
+    # Store the client in the config entry's runtime data, with the name resolver for
+    # triggers and system logs
+    names = ObjectNames(hass, entry, vantage)
+    entry.runtime_data = VantageData(
+        client=vantage,
+        entry_id=entry.entry_id,
+        object_names=names,
+    )
+
+    # Also stops lookups if setup fails, when Home Assistant runs the unload callbacks
+    entry.async_on_unload(names.cancel)
 
     try:
         # Initialize and fetch all objects
@@ -79,6 +91,19 @@ async def async_setup_entry(hass: HomeAssistant, entry: VantageConfigEntry) -> b
 
         # Add Vantage devices (controllers, modules, stations) to the device registry
         await async_setup_devices(hass, entry)
+
+        # Generate events naming the object that started each task, and for notable
+        # system logs, eg. a module losing power. Both are only streamed through the
+        # enhanced log, whose support is checked before the platforms are set up, so a
+        # connection failure here can retry setup from scratch.
+        if (await vantage.event_stream.start()).supports_enhanced_log:
+            async_setup_triggers(hass, entry)
+            async_setup_system_log(hass, entry)
+        else:
+            LOGGER.info(
+                "Controller firmware has no enhanced log, so no trigger or system log "
+                "events will fire"
+            )
 
         # Set up each platform (lights, covers, etc.)
         await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
@@ -107,7 +132,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: VantageConfigEntry) -> b
                 await asyncio.sleep(SYSTEM_PROGRAMMING_DELAY)
                 await vantage.initialize()
 
-            hass.async_create_task(refresh_controllers())
+                # Names of objects the integration doesn't load may have changed too
+                entry.runtime_data.object_names.clear()
+
+            # Tied to the entry, so an unload during the wait cancels it
+            entry.async_create_background_task(
+                hass, refresh_controllers(), "vantage_refresh_controllers"
+            )
 
         entry.async_on_unload(
             vantage.masters.subscribe(ObjectUpdated, on_master_updated)
@@ -140,8 +171,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: VantageConfigEntry) -> b
 
 async def async_unload_entry(hass: HomeAssistant, entry: VantageConfigEntry) -> bool:
     """Unload a config entry."""
-    # Close the Vantage client connection
+    # Unload all platforms first, so nothing polls the client once it is closed
+    unloaded = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+
+    # Close the Vantage client connection, once no lookup can reopen it
+    entry.runtime_data.object_names.cancel()
     entry.runtime_data.client.close()
 
-    # Unload all platforms
-    return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+    return unloaded

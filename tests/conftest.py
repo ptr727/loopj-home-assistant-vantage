@@ -134,7 +134,13 @@ def mock_get_serial_from_controller() -> Generator[AsyncMock]:
 
 
 @pytest.fixture
-def mock_vantage() -> Generator[Vantage]:
+def supports_enhanced_log() -> bool:
+    """Report controller firmware without the enhanced log, unless a test overrides it."""
+    return False
+
+
+@pytest.fixture
+def mock_vantage(supports_enhanced_log: bool) -> Generator[Vantage]:
     """Return a Vantage client loaded with one object of each supported kind."""
     vantage = Vantage(HOST, USERNAME, PASSWORD)
 
@@ -424,9 +430,17 @@ def mock_vantage() -> Generator[Vantage]:
         controller._objects.update((obj.vid, obj) for obj in objects)  # type: ignore
     vantage.thermostats._status_type = StatusType.OBJECT  # type: ignore
 
+    # Keep the event stream and its subscriptions off the network
     with (
         patch("custom_components.vantage.Vantage", return_value=vantage),
         patch.object(vantage, "initialize"),
+        patch.object(
+            vantage.event_stream,
+            "start",
+            return_value=MagicMock(supports_enhanced_log=supports_enhanced_log),
+        ),
+        patch.object(vantage.event_stream, "subscribe_triggers"),
+        patch.object(vantage.event_stream, "subscribe_system_log"),
     ):
         yield vantage
 
