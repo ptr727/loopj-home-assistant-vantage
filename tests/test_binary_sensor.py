@@ -39,7 +39,7 @@ def client_and_names(entry: MockConfigEntry) -> tuple[Vantage, ObjectNames]:
 
 
 @pytest.mark.parametrize("init_integration", [Platform.BINARY_SENSOR], indirect=True)
-@pytest.mark.usefixtures("init_integration")
+@pytest.mark.usefixtures("entity_registry_enabled_by_default", "init_integration")
 async def test_entities(
     hass: HomeAssistant,
     entity_registry: er.EntityRegistry,
@@ -64,6 +64,16 @@ async def async_refresh_module_status(
 
 
 @pytest.mark.usefixtures("init_integration")
+async def test_module_connectivity_disabled_by_default(
+    hass: HomeAssistant, entity_registry: er.EntityRegistry
+) -> None:
+    """Test that the module connectivity sensors start disabled."""
+    assert (entry := entity_registry.async_get("binary_sensor.module_1_connectivity"))
+    assert entry.disabled_by is er.RegistryEntryDisabler.INTEGRATION
+    assert hass.states.get("binary_sensor.module_1_connectivity") is None
+
+
+@pytest.mark.usefixtures("entity_registry_enabled_by_default", "init_integration")
 async def test_module_connectivity(
     hass: HomeAssistant, mock_config_entry: MockConfigEntry
 ) -> None:
@@ -105,7 +115,7 @@ async def test_module_connectivity(
     assert state.state == STATE_UNKNOWN
 
 
-@pytest.mark.usefixtures("init_integration")
+@pytest.mark.usefixtures("entity_registry_enabled_by_default", "init_integration")
 async def test_module_connectivity_unavailable(
     hass: HomeAssistant,
     mock_config_entry: MockConfigEntry,

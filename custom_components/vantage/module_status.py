@@ -17,7 +17,7 @@ from .const import DOMAIN, LOGGER
 from .names import ObjectNames
 
 # Polled as a fallback, "Module Offline/Online" system logs trigger a refresh at once
-MODULE_STATUS_INTERVAL = timedelta(seconds=30)
+MODULE_STATUS_INTERVAL = timedelta(seconds=60)
 
 UNLOADED = "Not read, the integration was unloaded"
 

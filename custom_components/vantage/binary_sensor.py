@@ -77,6 +77,7 @@ class VantageModuleConnectivityEntity(
 
     _attr_device_class = BinarySensorDeviceClass.CONNECTIVITY
     _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_entity_registry_enabled_default = False
     _attr_translation_key = "connectivity"
 
     # Named by Home Assistant from the translation key, after the module's device, so

@@ -387,6 +387,7 @@ def test_system_log_burst_reminder() -> None:
     assert noise("Station 8 is slow (VID:4)", now + 3)
 
 
+@pytest.mark.usefixtures("entity_registry_enabled_by_default")
 @pytest.mark.parametrize("supports_enhanced_log", [True])
 async def test_system_log_module_offline(
     hass: HomeAssistant,
