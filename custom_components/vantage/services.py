@@ -19,6 +19,7 @@ from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 import homeassistant.helpers.config_validation as cv
 
 from .const import DOMAIN, SERVICE_START_TASK, SERVICE_STOP_TASK
+from .diagnostic_services import async_register_diagnostic_services
 
 TASK_SCHEMA = vol.All(
     cv.has_at_most_one_key(ATTR_ID, ATTR_NAME),  # type: ignore
@@ -91,3 +92,5 @@ def async_register_services(hass: HomeAssistant) -> None:
     hass.services.async_register(  # type: ignore
         DOMAIN, SERVICE_STOP_TASK, stop_task, schema=TASK_SCHEMA
     )
+
+    async_register_diagnostic_services(hass)

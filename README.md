@@ -269,6 +269,16 @@ You can start a Vantage task by calling the `vantage.start_task` service, with e
 
 You can stop a Vantage task by calling the `vantage.stop_task` service, with either the Vantage ID of the task, or the task's name.
 
+### `vantage.get_trigger_history`
+
+Returns the controller's trigger history, the same entries InFusion Diagnostics shows in its History view, oldest first for each master. In a system with several masters, each master's entries follow the previous master's, and each configured Vantage integration's entries follow the previous one's, so the `master` and `host` attributes tell them apart. Each entry has the same attributes as the `vantage_trigger` event, plus the `time` it was recorded, in the controller's local time, and the `master` that recorded it. The optional `limit`, from 1 to 5000, caps the number of entries returned per master, newest kept, and defaults to 100.
+
+### `vantage.get_system_log`
+
+Returns the controller's system log, the same entries InFusion Diagnostics shows in its Log view. The order and the optional `limit` work as for `vantage.get_trigger_history`.
+
+Both of these services return an `errors` list naming any controller that couldn't be read, by its `host`, and any master that wasn't read, by its `master`. A peer master that answers with an error is skipped and the others are still read. Any other failure stops the reading, including an error answer from the connected master, a connection failure or a timeout, since the masters share one connection, and the masters after it are named as not read. The entries already returned are kept. A service fails when no Vantage integration is loaded, or when it returns no entries and something couldn't be read.
+
 ## Removing the integration
 
 This integration follows standard integration removal. No extra steps are needed on the Vantage controller.

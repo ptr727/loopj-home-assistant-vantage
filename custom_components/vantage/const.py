@@ -11,6 +11,11 @@ DOMAIN = "vantage"
 # Services
 SERVICE_START_TASK = "start_task"
 SERVICE_STOP_TASK = "stop_task"
+SERVICE_GET_TRIGGER_HISTORY = "get_trigger_history"
+SERVICE_GET_SYSTEM_LOG = "get_system_log"
+
+# Why a diagnostic service left something unread
+UNLOADED = "Not read, the integration was unloaded"
 
 # Events
 EVENT_BUTTON_PRESSED = f"{DOMAIN}_button_pressed"
