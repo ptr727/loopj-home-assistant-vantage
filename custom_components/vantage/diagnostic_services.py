@@ -31,12 +31,10 @@ from .const import (
     SERVICE_GET_SYSTEM_LOG,
     SERVICE_GET_TRIGGER_HISTORY,
 )
-from .module_status import read_module_status
+from .module_status import UNLOADED, read_module_status
 from .triggers import describe_trigger
 
 ATTR_LIMIT = "limit"
-
-UNLOADED = "Not read, the integration was unloaded"
 
 LOG_SCHEMA = vol.Schema(
     {vol.Optional(ATTR_LIMIT, default=100): vol.All(int, vol.Range(min=1))}

@@ -16,6 +16,8 @@ from .const import LOGGER
 # Polled as a fallback, "Module Offline/Online" system logs trigger a refresh at once
 MODULE_STATUS_INTERVAL = timedelta(seconds=30)
 
+UNLOADED = "Not read, the integration was unloaded"
+
 
 @dataclass
 class ModuleStatus:
@@ -56,12 +58,14 @@ async def read_module_status(entry: VantageConfigEntry) -> ModuleStatus:
 
     status = ModuleStatus()
     for vid, master in enclosures.items():
-        # The entry was unloaded mid-read, so don't reopen its closed client
+        number = (await names.info(vid)).position
+
+        # The entry was unloaded mid-read, so don't reopen its closed client. Checked
+        # after the lookup, which unload can land in or cancel, and right before the read.
         if names.closed:
-            status.failed[vid] = "Not read, the integration was unloaded"
+            status.failed[vid] = UNLOADED
             continue
 
-        number = (await names.info(vid)).position
         if number is None:
             LOGGER.debug("Enclosure %d has no position, skipping", vid)
             status.failed[vid] = "Enclosure position could not be read"
@@ -76,7 +80,9 @@ async def read_module_status(entry: VantageConfigEntry) -> ModuleStatus:
         except Exception as err:
             # aiovantage can also raise decode or XML errors that aren't a ClientError
             LOGGER.debug("Failed to read modules in enclosure %d: %s", vid, err)
-            status.failed[vid] = str(err) or type(err).__name__
+            status.failed[vid] = (
+                UNLOADED if names.closed else str(err) or type(err).__name__
+            )
             continue
 
         status.enclosures.add(vid)
@@ -104,13 +110,16 @@ class ModuleStatusCoordinator(DataUpdateCoordinator[ModuleStatus]):
         )
 
     async def _async_update_data(self) -> ModuleStatus:
+        # Captured first, since HA deletes runtime_data after an unload
+        names = self.config_entry.runtime_data.object_names
         try:
             status = await read_module_status(self.config_entry)
         except ClientError as err:
             raise UpdateFailed(f"Failed to read module status: {err}") from err
 
-        # Fail the update, as before, when no enclosure could be read at all
-        if status.failed and not status.enclosures:
+        # Fail the update, as before, when no enclosure could be read at all, but not when
+        # the entry was unloaded mid-read, which is no failure worth an error
+        if status.failed and not status.enclosures and not names.closed:
             raise UpdateFailed(f"No enclosure could be read: {status.failed}")
 
         return status
