@@ -61,14 +61,22 @@ async def async_setup_triggers(hass: HomeAssistant, entry: VantageConfigEntry) -
     async def fire_in_order() -> None:
         while True:
             trigger = await queue.get()
-            payload = await describe_trigger(
-                names,
-                trigger.source,
-                trigger.destination,
-                trigger.event,
-                trigger.param1,
-                trigger.param2,
-            )
+            # One bad trigger must not stop the worker, or no later trigger would fire
+            try:
+                payload = await describe_trigger(
+                    names,
+                    trigger.source,
+                    trigger.destination,
+                    trigger.event,
+                    trigger.param1,
+                    trigger.param2,
+                )
+            except Exception:
+                LOGGER.exception(
+                    "Failed to describe trigger from VID %s", trigger.source
+                )
+                continue
+
             hass.bus.async_fire(EVENT_TRIGGER, {"host": vantage.host} | payload)
 
     entry.async_create_background_task(hass, fire_in_order(), "vantage_triggers")

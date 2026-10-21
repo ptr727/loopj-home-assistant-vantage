@@ -29,10 +29,19 @@ class ObjectNames:
         self._vantage = vantage
         self._cache: dict[int, ObjectInfo] = {}
         self._pending: dict[int, asyncio.Task[ObjectInfo]] = {}
+        self._warned: set[int] = set()
+        self.closed = False
 
     def clear(self) -> None:
         """Forget looked up objects, eg. after the controller is reprogrammed."""
         self._cache.clear()
+        self._warned.clear()
+
+    def cancel(self) -> None:
+        """Stop looking objects up, before the client closes, so none reopens it."""
+        self.closed = True
+        for pending in self._pending.values():
+            pending.cancel()
 
     async def path(self, vid: int) -> list[str]:
         """Return the names of an object and its parents, eg. sensor, module, enclosure."""
@@ -67,13 +76,24 @@ class ObjectNames:
         if (info := self._cache.get(vid)) is not None:
             return info
 
+        if self.closed:
+            return ObjectInfo(f"VID {vid}", None, None)
+
         # Share a lookup already in flight rather than asking the controller again
         if (pending := self._pending.get(vid)) is None:
             pending = asyncio.ensure_future(self._fetch(vid))
             self._pending[vid] = pending
             pending.add_done_callback(lambda _: self._pending.pop(vid, None))
 
-        return await pending
+        # Shielded, so a cancelled caller doesn't cancel the lookup the others share
+        try:
+            return await asyncio.shield(pending)
+        except asyncio.CancelledError:
+            # Raise only for a caller that is itself being cancelled, not one whose
+            # lookup cancel() stopped at unload
+            if (task := asyncio.current_task()) is not None and task.cancelling():
+                raise
+            return ObjectInfo(f"VID {vid}", None, None)
 
     async def _fetch(self, vid: int) -> ObjectInfo:
         try:
@@ -84,7 +104,25 @@ class ObjectNames:
             # Not cached, so the next lookup tries again
             LOGGER.debug("Failed to look up object %d: %s", vid, err)
             return ObjectInfo(f"VID {vid}", None, None)
+        except Exception:
+            # aiovantage doesn't wrap decode or XML errors, which can also come from a
+            # reply left over after a timeout, so retry next time as for a ClientError.
+            # Warn once per object, since a lookup that keeps failing repeats each poll.
+            if vid in self._warned:
+                LOGGER.debug("Failed to read object %d again", vid, exc_info=True)
+            else:
+                self._warned.add(vid)
+                LOGGER.warning(
+                    "Failed to read object %d, naming it by VID", vid, exc_info=True
+                )
+            return ObjectInfo(f"VID {vid}", None, None)
 
+        # A reply left over after a timeout can describe another object
+        if objects and objects[0].vid != vid:
+            LOGGER.debug("Lookup of object %d returned object %d", vid, objects[0].vid)
+            return ObjectInfo(f"VID {vid}", None, None)
+
+        self._warned.discard(vid)
         info = _object_info(vid, objects[0].obj if objects else None)
         self._cache[vid] = info
         return info

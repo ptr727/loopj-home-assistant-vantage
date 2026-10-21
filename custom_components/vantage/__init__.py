@@ -20,10 +20,13 @@ from homeassistant.const import (
     Platform,
 )
 from homeassistant.core import HomeAssistant
+import homeassistant.helpers.config_validation as cv
 from homeassistant.helpers.dispatcher import async_dispatcher_send
+from homeassistant.helpers.typing import ConfigType
 from homeassistant.util.ssl import get_default_no_verify_context
 
 from .config_entry import VantageConfigEntry, VantageData
+from .const import DOMAIN
 from .device import async_cleanup_devices, async_setup_devices
 from .entity import async_cleanup_entities
 from .events import async_setup_events
@@ -45,6 +48,17 @@ PLATFORMS: list[Platform] = [
 
 # How long to wait after receiving a system programming event before refreshing
 SYSTEM_PROGRAMMING_DELAY = 30
+
+# The integration is only set up from config entries, never from YAML
+CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)  # type: ignore
+
+
+async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
+    """Set up the Vantage integration."""
+    # Register services (start task, stop task, etc.)
+    async_register_services(hass)
+
+    return True
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: VantageConfigEntry) -> bool:
@@ -77,9 +91,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: VantageConfigEntry) -> b
         # Set up each platform (lights, covers, etc.)
         await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
-        # Register services (start task, stop task, etc.)
-        async_register_services(hass)
-
         # Generate events for button presses, etc.
         async_setup_events(hass, entry)
 
@@ -107,7 +118,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: VantageConfigEntry) -> b
                 # Names of objects the integration doesn't load may have changed too
                 entry.runtime_data.object_names.clear()
 
-            hass.async_create_task(refresh_controllers())
+            # Tied to the entry, so an unload during the wait cancels it
+            entry.async_create_background_task(
+                hass, refresh_controllers(), "vantage_refresh_controllers"
+            )
 
         entry.async_on_unload(
             vantage.masters.subscribe(ObjectUpdated, on_master_updated)
@@ -143,7 +157,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: VantageConfigEntry) -> 
     # Unload all platforms first, so nothing polls the client once it is closed
     unloaded = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
 
-    # Close the Vantage client connection
+    # Close the Vantage client connection, once no lookup can reopen it
+    entry.runtime_data.object_names.cancel()
     entry.runtime_data.client.close()
 
     return unloaded

@@ -2,9 +2,9 @@
 
 from typing import Any, override
 
+from aiovantage.config_client import ModuleInfo
 from aiovantage.controllers import Controller
-from aiovantage.events import Connected, Disconnected, Reconnected
-from aiovantage.objects import DryContact, Master, SystemObject
+from aiovantage.objects import DryContact, SystemObject
 
 from homeassistant.components.binary_sensor import (
     BinarySensorDeviceClass,
@@ -18,6 +18,9 @@ from .config_entry import VantageConfigEntry
 from .entity import VantageEntity, add_entities_from_controller
 from .module_status import ModuleStatus, ModuleStatusCoordinator
 
+# Let aiovantage queue requests to the controller
+PARALLEL_UPDATES = 0
+
 
 async def async_setup_entry(
     hass: HomeAssistant,
@@ -30,11 +33,6 @@ async def async_setup_entry(
     # Add every dry contact as a binary sensor entity
     add_entities_from_controller(
         entry, async_add_entities, VantageBinarySensorEntity, vantage.dry_contacts
-    )
-
-    # Add a connectivity binary sensor for each controller
-    add_entities_from_controller(
-        entry, async_add_entities, VantageControllerConnectivityEntity, vantage.masters
     )
 
     # Add a connectivity binary sensor for each module, off when it drops off the bus
@@ -68,49 +66,6 @@ class VantageBinarySensorEntity(VantageEntity[DryContact], BinarySensorEntity):
         return self.obj.is_down
 
 
-class VantageControllerConnectivityEntity(VantageEntity[Master], BinarySensorEntity):
-    """Binary sensor reflecting the live connection to a Vantage controller.
-
-    Unlike the per-object entities, this sensor stays available and reports `off`
-    while the controller is unreachable, giving a single reliable signal that does
-    not depend on individual object polls failing one by one.
-    """
-
-    _attr_device_class = BinarySensorDeviceClass.CONNECTIVITY
-    _attr_entity_category = EntityCategory.DIAGNOSTIC
-
-    # Override the base "vantage" translation key so the name comes from the
-    # connectivity device class ("Connectivity").
-    _attr_translation_key = None
-
-    # Setup only completes after a successful initialize(), so the event stream is
-    # connected at this point. Connection events keep this in sync afterwards.
-    _attr_is_on = True
-
-    @property
-    @override
-    def unique_id(self) -> str:
-        return f"{self.obj.vid}:connectivity"
-
-    @override
-    async def async_added_to_hass(self) -> None:
-        await super().async_added_to_hass()
-
-        event_stream = self.client.event_stream
-
-        def set_connected(_event: Connected | Reconnected) -> None:
-            self._attr_is_on = True
-            self.async_write_ha_state()
-
-        def set_disconnected(_event: Disconnected) -> None:
-            self._attr_is_on = False
-            self.async_write_ha_state()
-
-        self.async_on_remove(event_stream.subscribe(Connected, set_connected))
-        self.async_on_remove(event_stream.subscribe(Reconnected, set_connected))
-        self.async_on_remove(event_stream.subscribe(Disconnected, set_disconnected))
-
-
 class VantageModuleConnectivityEntity(VantageEntity[SystemObject], BinarySensorEntity):
     """Binary sensor reporting whether a module responds on its enclosure bus.
 
@@ -119,6 +74,9 @@ class VantageModuleConnectivityEntity(VantageEntity[SystemObject], BinarySensorE
 
     _attr_device_class = BinarySensorDeviceClass.CONNECTIVITY
     _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    # Kept while the module is off the bus, when the controller no longer lists it
+    _last_info: ModuleInfo | None = None
 
     @property
     def coordinator(self) -> ModuleStatusCoordinator | None:
@@ -158,8 +116,7 @@ class VantageModuleConnectivityEntity(VantageEntity[SystemObject], BinarySensorE
     @property
     @override
     def extra_state_attributes(self) -> dict[str, Any] | None:
-        status = self._module_status()
-        if status is None or (info := status.modules.get(self.obj.vid)) is None:
+        if (info := self._last_info) is None:
             return None
 
         # The error count rises each time the module loses and regains the bus
@@ -177,6 +134,17 @@ class VantageModuleConnectivityEntity(VantageEntity[SystemObject], BinarySensorE
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
         if coordinator := self.coordinator:
+            self._record_info()
             self.async_on_remove(
-                coordinator.async_add_listener(self.async_write_ha_state)
+                coordinator.async_add_listener(self._handle_status_update)
             )
+
+    def _handle_status_update(self) -> None:
+        self._record_info()
+        self.async_write_ha_state()
+
+    def _record_info(self) -> None:
+        if (status := self._module_status()) is not None and (
+            info := status.modules.get(self.obj.vid)
+        ) is not None:
+            self._last_info = info

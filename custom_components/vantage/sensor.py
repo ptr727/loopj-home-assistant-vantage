@@ -1,21 +1,19 @@
 """Support for Vantage sensor entities."""
 
-import contextlib
 from decimal import Decimal
-import socket
 from typing import override
 
 from aiovantage.controllers import Controller
-from aiovantage.objects import AnemoSensor, LightSensor, Master, OmniSensor, Temperature
+from aiovantage.objects import AnemoSensor, LightSensor, OmniSensor, Temperature
 
 from homeassistant.components.sensor import (
     SensorDeviceClass,
     SensorEntity,
     SensorEntityDescription,
+    SensorStateClass,
 )
 from homeassistant.const import (
     LIGHT_LUX,
-    EntityCategory,
     UnitOfElectricCurrent,
     UnitOfPower,
     UnitOfSpeed,
@@ -26,6 +24,9 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .config_entry import VantageConfigEntry
 from .entity import VantageEntity, add_entities_from_controller
+
+# Let aiovantage queue requests to the controller
+PARALLEL_UPDATES = 0
 
 FOOT_CANDLES_TO_LUX = 10.7639
 
@@ -76,18 +77,13 @@ async def async_setup_entry(
         entry, async_add_entities, VantageOmniSensorEntity, vantage.omni_sensors
     )
 
-    # Add all master IP addresses as sensor entities
-    add_entities_from_controller(
-        entry, async_add_entities, VantageMasterIPSensorEntity, vantage.masters
-    )
-
 
 class VantageTempSensorEntity(VantageEntity[Temperature], SensorEntity):
     """Vantage temperature sensor entity."""
 
     _attr_device_class = SensorDeviceClass.TEMPERATURE
     _attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
-    _attr_state_class = "measurement"
+    _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_suggested_display_precision = 1
 
     def __init__(
@@ -115,7 +111,7 @@ class VantageAnemoSensorEntity(VantageEntity[AnemoSensor], SensorEntity):
     _attr_device_class = SensorDeviceClass.WIND_SPEED
     _attr_native_unit_of_measurement = UnitOfSpeed.MILES_PER_HOUR
     _attr_should_poll = True
-    _attr_state_class = "measurement"
+    _attr_state_class = SensorStateClass.MEASUREMENT
 
     @property
     def native_value(self) -> Decimal | None:
@@ -129,7 +125,7 @@ class VantageLightSensorEntity(VantageEntity[LightSensor], SensorEntity):
     _attr_device_class = SensorDeviceClass.ILLUMINANCE
     _attr_native_unit_of_measurement = LIGHT_LUX
     _attr_should_poll = True
-    _attr_state_class = "measurement"
+    _attr_state_class = SensorStateClass.MEASUREMENT
 
     @property
     def native_value(self) -> float | None:
@@ -144,7 +140,7 @@ class VantageOmniSensorEntity(VantageEntity[OmniSensor], SensorEntity):
     """Vantage omni sensor entity."""
 
     _attr_should_poll = True
-    _attr_state_class = "measurement"
+    _attr_state_class = SensorStateClass.MEASUREMENT
 
     def __init__(
         self,
@@ -168,23 +164,3 @@ class VantageOmniSensorEntity(VantageEntity[OmniSensor], SensorEntity):
     @override
     def native_value(self) -> int | Decimal | None:
         return self.obj.level
-
-
-class VantageMasterIPSensorEntity(VantageEntity[Master], SensorEntity):
-    """Vantage controller IP address sensor entity."""
-
-    _attr_icon = "mdi:ip"
-    _attr_entity_category = EntityCategory.DIAGNOSTIC
-
-    @property
-    @override
-    def unique_id(self) -> str:
-        return f"{self.obj.vid}:ip_address"
-
-    @property
-    @override
-    def native_value(self) -> str | None:
-        with contextlib.suppress(socket.gaierror):
-            return socket.gethostbyname(self.client.host)
-
-        return None

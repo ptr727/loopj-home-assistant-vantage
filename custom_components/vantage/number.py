@@ -17,6 +17,9 @@ from aiovantage.objects import GMem
 from .config_entry import VantageConfigEntry
 from .entity import VantageGMemEntity, add_entities_from_controller
 
+# Let aiovantage queue requests to the controller
+PARALLEL_UPDATES = 0
+
 NUMBER_ENTITY_DESCRIPTIONS: dict[str, NumberEntityDescription] = {
     # Generic fixed-precision unsigned measurement unit
     "DeviceUnits": NumberEntityDescription(
@@ -137,7 +140,7 @@ class VantageGMemNumberEntity(VantageGMemEntity, NumberEntity):
     @override
     async def async_set_native_value(self, value: float) -> None:
         if self.obj.is_fixed:
-            value = int(value * 1000)
+            value = round(value * 1000)
         else:
             value = int(value)
 
