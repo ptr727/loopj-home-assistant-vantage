@@ -8,6 +8,7 @@ from aiovantage.object_interfaces import FanInterface, ThermostatInterface
 from aiovantage.objects import Temperature, Thermostat
 
 from homeassistant.components.climate import (
+    ATTR_HVAC_MODE,
     ATTR_TARGET_TEMP_HIGH,
     ATTR_TARGET_TEMP_LOW,
     FAN_AUTO,
@@ -23,11 +24,15 @@ from homeassistant.components.climate import (
 )
 from homeassistant.const import ATTR_TEMPERATURE, UnitOfTemperature
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .config_entry import VantageConfigEntry
-from .const import LOGGER, FAN_MAX
+from .const import DOMAIN, FAN_MAX
 from .entity import VantageEntity, add_entities_from_controller
+
+# Let aiovantage queue requests to the controller
+PARALLEL_UPDATES = 0
 
 # Set up the min/max temperature range for the thermostat
 VANTAGE_MIN_TEMP = 5
@@ -254,21 +259,21 @@ class VantageClimateEntity(VantageEntity[ThermostatTypes], ClimateEntity):
 
     @override
     async def async_set_hvac_mode(self, hvac_mode: HVACMode) -> None:
-        vantage_hvac_mode = HA_HVAC_MODE_TO_VANTAGE_OPERATION_MODE.get(hvac_mode)
-        if vantage_hvac_mode is None:
-            LOGGER.error("Invalid mode for async_set_hvac_mode: %s", hvac_mode)
-            return
-
+        # Home Assistant has already checked the mode against hvac_modes
+        vantage_hvac_mode = HA_HVAC_MODE_TO_VANTAGE_OPERATION_MODE[hvac_mode]
         await self.async_request_call(self.obj.set_operation_mode(vantage_hvac_mode))
 
     @override
     async def async_set_fan_mode(self, fan_mode: str) -> None:
-        vantage_fan_mode = HA_FAN_MODE_TO_VANTAGE_FAN_MODE.get(fan_mode)
-        if vantage_fan_mode is None:
-            LOGGER.error("Invalid mode for async_set_fan_mode: %s", fan_mode)
-            return
-
-        await self.async_request_call(self.obj.set_fan_mode(vantage_fan_mode))
+        # Home Assistant has already checked the mode against fan_modes
+        if isinstance(self.obj, FanInterface):
+            # Thermostats with a fan interface offer fan speeds
+            fan_speed = HA_FAN_MODE_TO_VANTAGE_FAN_SPEED[fan_mode]
+            await self.async_request_call(self.obj.set_speed(fan_speed))
+        else:
+            # Other thermostats offer auto and on
+            vantage_fan_mode = HA_FAN_MODE_TO_VANTAGE_FAN_MODE[fan_mode]
+            await self.async_request_call(self.obj.set_fan_mode(vantage_fan_mode))
 
     @override
     async def async_set_temperature(self, **kwargs: Any) -> None:
@@ -276,15 +281,24 @@ class VantageClimateEntity(VantageEntity[ThermostatTypes], ClimateEntity):
         high_temp = kwargs.get(ATTR_TARGET_TEMP_HIGH)
         temp = kwargs.get(ATTR_TEMPERATURE)
 
-        if self.hvac_mode == HVACMode.HEAT_COOL and low_temp and high_temp:
+        # Switch mode first, and pick the set point for the requested mode
+        hvac_mode = kwargs.get(ATTR_HVAC_MODE, self.hvac_mode)
+        if ATTR_HVAC_MODE in kwargs:
+            await self.async_set_hvac_mode(hvac_mode)
+
+        if hvac_mode == HVACMode.HEAT_COOL and low_temp and high_temp:
             await self.async_request_call(self.obj.set_cool_set_point(high_temp))
             await self.async_request_call(self.obj.set_heat_set_point(low_temp))
-        elif self.hvac_mode == HVACMode.HEAT and temp:
+        elif hvac_mode == HVACMode.HEAT and temp:
             await self.async_request_call(self.obj.set_heat_set_point(temp))
-        elif self.hvac_mode == HVACMode.COOL and temp:
+        elif hvac_mode == HVACMode.COOL and temp:
             await self.async_request_call(self.obj.set_cool_set_point(temp))
         else:
-            LOGGER.error("Invalid arguments for async_set_temperature in %s", kwargs)
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key="set_temperature_unsupported",
+                translation_placeholders={"hvac_mode": str(hvac_mode)},
+            )
 
 
 class VantageLegacyClimateEntity(VantageClimateEntity):

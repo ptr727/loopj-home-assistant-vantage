@@ -124,9 +124,15 @@ class VantageEntity[T: SystemObject](Entity):
                 # unavailable. This can happen when the user deletes an object from the
                 # Vantage project and we haven't refreshed the entity registry yet.
                 self._attr_available = False
+                self.async_write_ha_state()
 
             raise HomeAssistantError(
-                f"Request for {self.entity_id} failed: {err}"
+                translation_domain=DOMAIN,
+                translation_key="request_failed",
+                translation_placeholders={
+                    "entity_id": self.entity_id,
+                    "error": str(err),
+                },
             ) from err
 
     @override
@@ -211,7 +217,8 @@ class VantageGMemEntity(VantageEntity[GMem]):
     @override
     def device_info(self) -> DeviceInfo:
         # Attach variable entities to a "variables" virtual device
-        return DeviceInfo(
+        # TODO: Switch to via_device_id once hacs.json requires Home Assistant 2026.8.0
+        return DeviceInfo(  # type: ignore
             identifiers={(DOMAIN, f"{self.obj.master}:variables")},
             name="Variables",
             manufacturer="Vantage",

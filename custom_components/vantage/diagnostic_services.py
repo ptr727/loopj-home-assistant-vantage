@@ -1,12 +1,18 @@
 """Services that read the controller's diagnostics, as InFusion Diagnostics shows them."""
 
 from collections.abc import Awaitable, Callable, Coroutine
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from aiovantage import Vantage
 from aiovantage.config_client import DiagnosticInterface, SysLogType
 from aiovantage.errors import ClientResponseError
-import voluptuous as vol
+
+# Type check against probatio, which Home Assistant 2026.9.0 and later load as voluptuous
+# TODO: Import probatio directly once hacs.json requires Home Assistant 2026.9.0
+if TYPE_CHECKING:
+    import probatio as vol
+else:
+    import voluptuous as vol
 
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import (
@@ -267,11 +273,10 @@ def async_register_diagnostic_services(hass: HomeAssistant) -> None:
             vol.Schema({}),
         ),
     ):
-        if not hass.services.has_service(DOMAIN, service):
-            hass.services.async_register(
-                DOMAIN,
-                service,
-                handler,
-                schema=schema,
-                supports_response=SupportsResponse.ONLY,
-            )
+        hass.services.async_register(  # type: ignore
+            DOMAIN,
+            service,
+            handler,
+            schema=schema,
+            supports_response=SupportsResponse.ONLY,
+        )
