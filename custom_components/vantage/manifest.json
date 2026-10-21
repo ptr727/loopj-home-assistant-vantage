@@ -17,9 +17,9 @@
     "custom_components.vantage"
   ],
   "requirements": [
-    "git+https://github.com/ptr727/loopj-aiovantage.git@1ec3fbd5108415f968cc01b2787e42057fd05d8b#aiovantage==0.24.0.dev2"
+    "git+https://github.com/ptr727/loopj-aiovantage.git@22cb1bfd4d7e4fdeeea8200011cdefe5b0db1826#aiovantage==0.24.0.dev3"
   ],
-  "version": "0.16.0b2.dev2",
+  "version": "0.16.0b2.dev3",
   "zeroconf": [
     {
       "type": "_secure_aci._tcp.local.",

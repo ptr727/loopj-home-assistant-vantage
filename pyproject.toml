@@ -11,7 +11,7 @@ requires-python = ">=3.14.2"
 authors = [{ name = "James Smith", email = "james@loopj.com" }]
 classifiers = ["Private :: Do Not Upload"]
 dependencies = [
-    "aiovantage==0.24.0.dev2",
+    "aiovantage==0.24.0.dev3",
     "homeassistant==2026.10.2",
     "colorlog==6.12.0",
 ]
@@ -105,4 +105,4 @@ push = true
 # The diagnostics work needs the unreleased aiovantage diagnostics branch, built from the fork.
 # Swap the source for { path = "../aiovantage", editable = true } to develop both together.
 [tool.uv.sources]
-aiovantage = { git = "https://github.com/ptr727/loopj-aiovantage.git", rev = "1ec3fbd5108415f968cc01b2787e42057fd05d8b" }
+aiovantage = { git = "https://github.com/ptr727/loopj-aiovantage.git", rev = "22cb1bfd4d7e4fdeeea8200011cdefe5b0db1826" }
