@@ -1,22 +1,46 @@
 """Tests for the Vantage InFusion events."""
 
-from typing import Any
+import asyncio
+from collections.abc import Callable
+from types import SimpleNamespace
+from typing import Any, cast
+from unittest.mock import MagicMock, patch
 
 from aiovantage import Vantage
-from aiovantage.events import ObjectUpdated
+from aiovantage.config_client import SysLogType, TriggerType
+from aiovantage.events import ObjectUpdated, SystemLogReceived, TriggerReceived
 from aiovantage.objects import Button
 import pytest
 from pytest_homeassistant_custom_component.common import async_capture_events
 
-from homeassistant.core import HomeAssistant
+from homeassistant.components.logbook import (
+    LOGBOOK_ENTRY_MESSAGE,
+    LOGBOOK_ENTRY_NAME,
+)
+from homeassistant.const import STATE_OFF, STATE_ON
+from homeassistant.core import Event, HomeAssistant
 
 from custom_components.vantage.const import (
+    DOMAIN,
     EVENT_BUTTON_PRESSED,
     EVENT_BUTTON_RELEASED,
+    EVENT_SYSTEM_LOG,
     EVENT_TASK_STARTED,
     EVENT_TASK_STATE_CHANGED,
     EVENT_TASK_STOPPED,
+    EVENT_TRIGGER,
 )
+from custom_components.vantage.logbook import async_describe_events
+from custom_components.vantage.module_status import ModuleStatus
+from custom_components.vantage.system_log import (
+    COMPILER_SOURCE,
+    REPEAT_REMINDER,
+    REPEAT_WINDOW,
+    Shape,
+    is_noise,
+)
+
+from .conftest import HOST
 
 pytestmark = pytest.mark.usefixtures("init_integration")
 
@@ -92,3 +116,318 @@ async def test_task_events(
 
     assert len(events) == 1
     assert events[0].data == data
+
+
+async def async_wait_for_events(events: list[Event[Any]], count: int) -> None:
+    """Wait for the event workers, whose name lookups run outside tracked tasks."""
+    for _ in range(20):
+        if len(events) >= count:
+            return
+        await asyncio.sleep(0)
+
+
+def trigger_callback(vantage: Vantage) -> Callable[[TriggerReceived], None]:
+    """Return the callback the integration subscribed to triggers with."""
+    subscribe = cast(MagicMock, vantage.event_stream.subscribe_triggers)
+    return subscribe.call_args.args[0]
+
+
+def system_log_callback(vantage: Vantage) -> Callable[[SystemLogReceived], None]:
+    """Return the callback the integration subscribed to the system log with."""
+    subscribe = cast(MagicMock, vantage.event_stream.subscribe_system_log)
+    return subscribe.call_args.args[0]
+
+
+@pytest.mark.parametrize("supports_enhanced_log", [True])
+@pytest.mark.parametrize(
+    ("event", "trigger_type"),
+    [(TriggerType.BUTTON_DOWN, "button_down"), (99, "unknown_99")],
+)
+async def test_trigger_event(
+    hass: HomeAssistant,
+    mock_vantage: Vantage,
+    event: int,
+    trigger_type: str,
+) -> None:
+    """Test that a button starting a task fires a trigger event."""
+    events = async_capture_events(hass, EVENT_TRIGGER)
+
+    trigger_callback(mock_vantage)(TriggerReceived(61, 60, event, 1, 0))
+    await hass.async_block_till_done()
+
+    assert len(events) == 1
+    assert events[0].data == {
+        "host": HOST,
+        "trigger_type": trigger_type,
+        "event": event,
+        "source_id": 61,
+        "source_name": "Kitchen Button",
+        "source_path": ["Kitchen Button", "Kitchen Keypad", "Controller 1"],
+        "task_id": 60,
+        "task_name": "Goodnight",
+        "param1": 1,
+        "param2": 0,
+    }
+
+
+@pytest.mark.parametrize("supports_enhanced_log", [True])
+async def test_trigger_event_unloaded_object(
+    hass: HomeAssistant,
+    mock_vantage: Vantage,
+) -> None:
+    """Test that a trigger from an object the integration doesn't load is named."""
+    events = async_capture_events(hass, EVENT_TRIGGER)
+    timer = SimpleNamespace(vid=70, obj=SimpleNamespace(name="Sunset", parent=None))
+
+    with patch(
+        "custom_components.vantage.names.ConfigurationInterface.get_object",
+        return_value=[timer],
+    ) as get_object:
+        for _ in range(2):
+            trigger_callback(mock_vantage)(
+                TriggerReceived(70, 60, TriggerType.TIMER, 0, 0)
+            )
+            await async_wait_for_events(events, len(events) + 1)
+
+    # Looked up once, then named from the cache
+    get_object.assert_awaited_once()
+    assert len(events) == 2
+    for event in events:
+        assert event.data["source_name"] == "Sunset"
+        assert event.data["source_path"] == ["Sunset"]
+        assert event.data["trigger_type"] == "timer"
+
+
+async def test_no_enhanced_log(mock_vantage: Vantage) -> None:
+    """Test that firmware without the enhanced log subscribes to neither log."""
+    cast(MagicMock, mock_vantage.event_stream.subscribe_triggers).assert_not_called()
+    cast(MagicMock, mock_vantage.event_stream.subscribe_system_log).assert_not_called()
+
+
+@pytest.mark.parametrize("supports_enhanced_log", [True])
+@pytest.mark.parametrize(
+    ("log", "data"),
+    [
+        (
+            SystemLogReceived(SysLogType.WARNING, "Controller", "Overload (VID:3)"),
+            {
+                "host": HOST,
+                "type": "warning",
+                "source": "Controller",
+                "message": "Overload (VID:3)",
+                "object_id": 3,
+                "object_name": "Module 1",
+            },
+        ),
+        (
+            SystemLogReceived(SysLogType.ERROR, "Controller", "Out of memory"),
+            {
+                "host": HOST,
+                "type": "error",
+                "source": "Controller",
+                "message": "Out of memory",
+            },
+        ),
+        (
+            SystemLogReceived(
+                SysLogType.INFORMATION, "Station", "Module Online: 1.1 [3]"
+            ),
+            {
+                "host": HOST,
+                "type": "information",
+                "source": "Station",
+                "message": "Module Online: 1.1 [3]",
+                "object_id": 3,
+                "object_name": "Module 1",
+            },
+        ),
+        (
+            SystemLogReceived(SysLogType.WARNING, "Controller", "[ALERT] Check 1"),
+            {
+                "host": HOST,
+                "type": "warning",
+                "source": "Controller",
+                "message": "[ALERT] Check 1",
+            },
+        ),
+        (
+            SystemLogReceived(42, "Station", "Module Status: 1.1 [3]"),
+            {
+                "host": HOST,
+                "type": "unknown_42",
+                "source": "Station",
+                "message": "Module Status: 1.1 [3]",
+                "object_id": 3,
+                "object_name": "Module 1",
+            },
+        ),
+    ],
+)
+async def test_system_log_event(
+    hass: HomeAssistant,
+    mock_vantage: Vantage,
+    log: SystemLogReceived,
+    data: dict[str, Any],
+) -> None:
+    """Test that a notable system log fires an event."""
+    events = async_capture_events(hass, EVENT_SYSTEM_LOG)
+
+    system_log_callback(mock_vantage)(log)
+    await hass.async_block_till_done()
+
+    assert len(events) == 1
+    assert events[0].data == data
+
+
+@pytest.mark.parametrize("supports_enhanced_log", [True])
+@pytest.mark.parametrize(
+    "log",
+    [
+        SystemLogReceived(SysLogType.INFORMATION, "Controller", "Task completed"),
+        SystemLogReceived(SysLogType.TASK, "Controller", "Task 60 started"),
+        SystemLogReceived(SysLogType.WARNING, COMPILER_SOURCE, "Unused variable"),
+        SystemLogReceived(
+            SysLogType.WARNING,
+            "Controller",
+            "Script 60 compiled with warnings in 0.5 seconds.",
+        ),
+    ],
+)
+async def test_system_log_not_forwarded(
+    hass: HomeAssistant,
+    mock_vantage: Vantage,
+    log: SystemLogReceived,
+) -> None:
+    """Test that routine logs and compiler output fire no event."""
+    events = async_capture_events(hass, EVENT_SYSTEM_LOG)
+
+    system_log_callback(mock_vantage)(log)
+    await hass.async_block_till_done()
+
+    assert not events
+
+
+@pytest.mark.parametrize("supports_enhanced_log", [True])
+async def test_system_log_burst(
+    hass: HomeAssistant,
+    mock_vantage: Vantage,
+) -> None:
+    """Test that a burst of one warning over numbered stations fires one event."""
+    events = async_capture_events(hass, EVENT_SYSTEM_LOG)
+
+    for station in range(1, 4):
+        system_log_callback(mock_vantage)(
+            SystemLogReceived(
+                SysLogType.WARNING,
+                "Controller",
+                f"Station bus command not processed on station {station}",
+            )
+        )
+    await hass.async_block_till_done()
+
+    assert len(events) == 1
+
+
+def test_system_log_burst_reminder() -> None:
+    """Test that a burst passes the first warning, then one again hourly."""
+    seen: dict[Shape, tuple[float, float]] = {}
+
+    def noise(message: str, now: float) -> bool:
+        log = SystemLogReceived(SysLogType.WARNING, "Controller", message)
+        return is_noise(log, seen, now)
+
+    assert not noise("Station 1 is slow", 0)
+    assert noise("Station 2 is slow", 30)
+
+    # Still in the burst an hour after the first passed, so one passes as a reminder
+    now = 30.0
+    while now + 30 < REPEAT_REMINDER:
+        now += 30
+        assert noise("Station 3 is slow", now)
+    now = REPEAT_REMINDER + 10
+    assert not noise("Station 4 is slow", now)
+    assert noise("Station 5 is slow", now + 30)
+
+    # A quiet spell ends the burst
+    now += 30 + REPEAT_WINDOW
+    assert not noise("Station 6 is slow", now)
+
+    # Warnings naming another VID stay apart
+    assert not noise("Station 7 is slow (VID:3)", now + 1)
+    assert not noise("Station 7 is slow (VID:4)", now + 2)
+    assert noise("Station 8 is slow (VID:4)", now + 3)
+
+
+@pytest.mark.parametrize("supports_enhanced_log", [True])
+async def test_system_log_module_offline(
+    hass: HomeAssistant,
+    mock_vantage: Vantage,
+) -> None:
+    """Test that a module going offline refreshes its connectivity at once."""
+    assert (state := hass.states.get("binary_sensor.module_1_connectivity"))
+    assert state.state == STATE_ON
+
+    with patch(
+        "custom_components.vantage.module_status.read_module_status",
+        return_value=ModuleStatus(enclosures={1}),
+    ):
+        system_log_callback(mock_vantage)(
+            SystemLogReceived(
+                SysLogType.INFORMATION, "Station", "Module Offline: 1.1 [3]"
+            )
+        )
+        await hass.async_block_till_done()
+
+    assert (state := hass.states.get("binary_sensor.module_1_connectivity"))
+    assert state.state == STATE_OFF
+
+
+async def test_logbook_descriptions(hass: HomeAssistant) -> None:
+    """Test that trigger and system log events are described in the logbook."""
+    describers: dict[str, Callable[[Event[Any]], dict[str, str]]] = {}
+
+    def describe_event(
+        domain: str, event_type: str, describer: Callable[[Event[Any]], dict[str, str]]
+    ) -> None:
+        assert domain == DOMAIN
+        describers[event_type] = describer
+
+    async_describe_events(hass, describe_event)
+
+    trigger = describers[EVENT_TRIGGER](
+        Event(
+            EVENT_TRIGGER,
+            {
+                "trigger_type": "out_of_range",
+                "source_name": "Module Power",
+                "source_path": ["Module Power", "Module 1"],
+                "task_name": "Goodnight",
+            },
+        )
+    )
+    assert trigger == {
+        LOGBOOK_ENTRY_NAME: "Vantage",
+        LOGBOOK_ENTRY_MESSAGE: "Out of range: Module Power, Module 1 started Goodnight",
+    }
+
+    # An object with no path is described by its name
+    trigger = describers[EVENT_TRIGGER](
+        Event(
+            EVENT_TRIGGER,
+            {
+                "trigger_type": "timer",
+                "source_name": "VID 70",
+                "source_path": [],
+                "task_name": "Goodnight",
+            },
+        )
+    )
+    assert trigger[LOGBOOK_ENTRY_MESSAGE] == "Timer: VID 70 started Goodnight"
+
+    system_log = describers[EVENT_SYSTEM_LOG](
+        Event(EVENT_SYSTEM_LOG, {"type": "warning", "message": "Overload (VID:3)"})
+    )
+    assert system_log == {
+        LOGBOOK_ENTRY_NAME: "Vantage",
+        LOGBOOK_ENTRY_MESSAGE: "Warning: Overload (VID:3)",
+    }
