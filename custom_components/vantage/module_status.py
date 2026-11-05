@@ -152,8 +152,9 @@ class ModuleStatusCoordinator(DataUpdateCoordinator[ModuleStatus]):
         # it came online and the monotonic time it arrived
         self._logs: dict[int, tuple[bool, float]] = {}
 
-        # Modules held online while a confirming read is pending, and that read's timer
-        self._held: set[int] = set()
+        # Modules held online while a confirming read is pending, keyed by VID, with the
+        # monotonic time the read that first missed each started, and that read's timer
+        self._held: dict[int, float] = {}
         self._cancel_confirm: CALLBACK_TYPE | None = None
 
     @callback
@@ -189,7 +190,7 @@ class ModuleStatusCoordinator(DataUpdateCoordinator[ModuleStatus]):
 
         if vid is not None:
             self._logs[vid] = (online, time.monotonic())
-            self._held.discard(vid)
+            self._held.pop(vid, None)
             self.data = replace(
                 self.data, overrides=self.data.overrides | {vid: online}
             )
@@ -220,7 +221,7 @@ class ModuleStatusCoordinator(DataUpdateCoordinator[ModuleStatus]):
         }
 
         previous = self.data
-        held: set[int] = set()
+        held: dict[int, float] = {}
         for module in self._vantage.modules:
             vid = module.vid
             if (
@@ -230,17 +231,25 @@ class ModuleStatusCoordinator(DataUpdateCoordinator[ModuleStatus]):
             ):
                 continue
 
-            # Missing from a read when it was online, and not yet confirmed missing
-            if previous.is_online(module) and vid not in self._held:
-                status.overrides[vid] = True
-                held.add(vid)
+            # Missing from a read when it was online, so hold it. Only a read that started
+            # the full delay after the first miss confirms it, so a read in between, such
+            # as one the next module's log asks for, keeps holding it.
+            if (since := self._held.get(vid)) is None:
+                if previous.is_online(module):
+                    held[vid] = started
+            elif started < since + MISSING_CONFIRM_DELAY:
+                held[vid] = since
+
+        for vid in held:
+            status.overrides[vid] = True
 
         self._held = held
         self._cancel_confirm_read()
         if held:
-            LOGGER.debug("Modules %s missing from the bus, reading it again", held)
+            LOGGER.debug("Modules %s missing from the bus, reading it again", set(held))
+            delay = min(held.values()) + MISSING_CONFIRM_DELAY - time.monotonic()
             self._cancel_confirm = async_call_later(
-                self.hass, MISSING_CONFIRM_DELAY, self._confirm_read
+                self.hass, max(delay, 0), self._confirm_read
             )
 
         return status

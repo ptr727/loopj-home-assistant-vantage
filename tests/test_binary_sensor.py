@@ -10,6 +10,7 @@ from aiovantage import Vantage
 from aiovantage.config_client import ModuleInfo, SysLogType
 from aiovantage.errors import ClientConnectionError
 from aiovantage.events import SystemLogReceived
+from freezegun.api import FrozenDateTimeFactory
 import pytest
 from pytest_homeassistant_custom_component.common import (
     MockConfigEntry,
@@ -152,7 +153,9 @@ async def test_module_connectivity_disabled_by_default(
 
 @pytest.mark.usefixtures("entity_registry_enabled_by_default", "init_integration")
 async def test_module_connectivity(
-    hass: HomeAssistant, mock_config_entry: MockConfigEntry
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    freezer: FrozenDateTimeFactory,
 ) -> None:
     """Test a module dropping off its enclosure's bus and rejoining it."""
     entity_id = "binary_sensor.module_1_connectivity"
@@ -169,6 +172,7 @@ async def test_module_connectivity(
     assert state.state == STATE_ON
 
     # Off the bus, keeping the address and error count it was last seen with
+    freezer.tick(timedelta(seconds=6))
     await async_refresh_module_status(
         hass, mock_config_entry, ModuleStatus(enclosures={1})
     )
@@ -205,6 +209,7 @@ async def test_module_missing_confirmed_by_second_read(
     hass: HomeAssistant,
     mock_config_entry: MockConfigEntry,
     mock_get_modules: AsyncMock,
+    freezer: FrozenDateTimeFactory,
 ) -> None:
     """Test that a module missing from a read is read again before it goes off."""
     entity_id = "binary_sensor.module_1_connectivity"
@@ -220,10 +225,20 @@ async def test_module_missing_confirmed_by_second_read(
     assert (state := hass.states.get(entity_id))
     assert state.state == STATE_ON
 
-    # Still missing from that read, so it's off the bus
-    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=6))
-    await hass.async_block_till_done(wait_background_tasks=True)
+    # A read in between, as the next module's log asks for, misses it too, but it's
+    # too soon to confirm, so it's still held
+    freezer.tick(timedelta(seconds=1))
+    await mock_config_entry.runtime_data.module_status.async_refresh()
+    await hass.async_block_till_done()
     assert mock_get_modules.await_count == 3
+    assert (state := hass.states.get(entity_id))
+    assert state.state == STATE_ON
+
+    # Still missing from the read the full delay after the first miss, so it's off
+    freezer.tick(timedelta(seconds=5))
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done(wait_background_tasks=True)
+    assert mock_get_modules.await_count == 4
     assert (state := hass.states.get(entity_id))
     assert state.state == STATE_OFF
 
@@ -234,6 +249,7 @@ async def test_module_rejoins_before_confirming_read(
     hass: HomeAssistant,
     mock_config_entry: MockConfigEntry,
     mock_get_modules: AsyncMock,
+    freezer: FrozenDateTimeFactory,
 ) -> None:
     """Test that a module back by the confirming read never shows off the bus.
 
@@ -256,7 +272,8 @@ async def test_module_rejoins_before_confirming_read(
     await hass.async_block_till_done()
 
     mock_get_modules.return_value = [ModuleInfo(address=1, vid=3, errors=0)]
-    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=6))
+    freezer.tick(timedelta(seconds=6))
+    async_fire_time_changed(hass)
     await hass.async_block_till_done(wait_background_tasks=True)
     assert mock_get_modules.await_count == 3
 
