@@ -65,6 +65,11 @@
     }
   },
   "entity": {
+    "binary_sensor": {
+      "connectivity": {
+        "name": "Connectivity"
+      }
+    },
     "climate": {
       "vantage": {
         "state_attributes": {
@@ -78,6 +83,24 @@
     }
   },
   "exceptions": {
+    "get_module_status_failed": {
+      "message": "Failed to read the module status: {errors}"
+    },
+    "get_system_log_failed": {
+      "message": "Failed to read the system log: {errors}"
+    },
+    "get_trigger_history_failed": {
+      "message": "Failed to read the trigger history: {errors}"
+    },
+    "module_status_failed": {
+      "message": "Failed to read the module status: {error}"
+    },
+    "no_enclosure_read": {
+      "message": "No enclosure could be read: {errors}"
+    },
+    "not_loaded": {
+      "message": "No Vantage controller is loaded"
+    },
     "request_failed": {
       "message": "Request for {entity_id} failed: {error}"
     },
