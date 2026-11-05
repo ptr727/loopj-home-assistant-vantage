@@ -104,9 +104,15 @@ def async_setup_system_log(hass: HomeAssistant, entry: VantageConfigEntry) -> No
         if not is_notable(log):
             return
 
-        # A module dropped off or rejoined the bus, refresh its connectivity now
-        if MODULE_BUS_CHANGE.match(log.message):
-            entry.runtime_data.module_status.async_refresh_if_listened()
+        # A module dropped off or rejoined the bus, so apply it to its connectivity now
+        # and read the bus. A program write logs each module coming back online in turn,
+        # and a read between two of those logs misses the modules still to come.
+        if bus_change := MODULE_BUS_CHANGE.match(log.message):
+            vid_match = OBJECT_VID.search(log.message)
+            entry.runtime_data.module_status.async_module_logged(
+                int(vid_match.group(1) or vid_match.group(2)) if vid_match else None,
+                bus_change.group(1) == "Online",
+            )
 
         if is_noise(log, seen, time.monotonic()):
             return

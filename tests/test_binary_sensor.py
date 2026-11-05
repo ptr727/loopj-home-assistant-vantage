@@ -2,6 +2,7 @@
 
 import asyncio
 from collections.abc import Generator
+from datetime import timedelta
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -12,6 +13,7 @@ from aiovantage.events import SystemLogReceived
 import pytest
 from pytest_homeassistant_custom_component.common import (
     MockConfigEntry,
+    async_fire_time_changed,
     snapshot_platform,
 )
 from syrupy.assertion import SnapshotAssertion
@@ -26,8 +28,10 @@ from homeassistant.const import (
     STATE_UNKNOWN,
     Platform,
 )
-from homeassistant.core import HomeAssistant
+from homeassistant.core import Event, EventStateChangedData, HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers.event import async_track_state_change_event
+from homeassistant.util import dt as dt_util
 
 from . import setup_integration
 from .conftest import ENCLOSURE_VID
@@ -157,6 +161,13 @@ async def test_module_connectivity(
     assert state.attributes["address"] == 1
     assert state.attributes["errors"] == 0
 
+    # Missing from one read, so held online until a second read confirms it
+    await async_refresh_module_status(
+        hass, mock_config_entry, ModuleStatus(enclosures={1})
+    )
+    assert (state := hass.states.get(entity_id))
+    assert state.state == STATE_ON
+
     # Off the bus, keeping the address and error count it was last seen with
     await async_refresh_module_status(
         hass, mock_config_entry, ModuleStatus(enclosures={1})
@@ -186,6 +197,118 @@ async def test_module_connectivity(
     )
     assert (state := hass.states.get(entity_id))
     assert state.state == STATE_UNKNOWN
+
+
+@pytest.mark.usefixtures("entity_registry_enabled_by_default")
+@pytest.mark.parametrize("supports_enhanced_log", [True])
+async def test_module_missing_confirmed_by_second_read(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    mock_get_modules: AsyncMock,
+) -> None:
+    """Test that a module missing from a read is read again before it goes off."""
+    entity_id = "binary_sensor.module_1_connectivity"
+    await setup_integration(hass, mock_config_entry)
+    await hass.async_block_till_done(wait_background_tasks=True)
+    assert mock_get_modules.await_count == 1
+
+    # The poll misses it, so it's held online and the bus is read again shortly
+    mock_get_modules.return_value = []
+    await mock_config_entry.runtime_data.module_status.async_refresh()
+    await hass.async_block_till_done()
+    assert mock_get_modules.await_count == 2
+    assert (state := hass.states.get(entity_id))
+    assert state.state == STATE_ON
+
+    # Still missing from that read, so it's off the bus
+    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=6))
+    await hass.async_block_till_done(wait_background_tasks=True)
+    assert mock_get_modules.await_count == 3
+    assert (state := hass.states.get(entity_id))
+    assert state.state == STATE_OFF
+
+
+@pytest.mark.usefixtures("entity_registry_enabled_by_default")
+@pytest.mark.parametrize("supports_enhanced_log", [True])
+async def test_module_rejoins_before_confirming_read(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    mock_get_modules: AsyncMock,
+) -> None:
+    """Test that a module back by the confirming read never shows off the bus.
+
+    A program write re-announces the modules one at a time, and a read between two
+    announcements misses the modules still to come.
+    """
+    entity_id = "binary_sensor.module_1_connectivity"
+    await setup_integration(hass, mock_config_entry)
+    await hass.async_block_till_done(wait_background_tasks=True)
+    changes: list[str | None] = []
+
+    @callback
+    def record(event: Event[EventStateChangedData]) -> None:
+        changes.append(state.state if (state := event.data["new_state"]) else None)
+
+    async_track_state_change_event(hass, entity_id, record)
+
+    mock_get_modules.return_value = []
+    await mock_config_entry.runtime_data.module_status.async_refresh()
+    await hass.async_block_till_done()
+
+    mock_get_modules.return_value = [ModuleInfo(address=1, vid=3, errors=0)]
+    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=6))
+    await hass.async_block_till_done(wait_background_tasks=True)
+    assert mock_get_modules.await_count == 3
+
+    assert STATE_OFF not in changes
+    assert (state := hass.states.get(entity_id))
+    assert state.state == STATE_ON
+
+
+@pytest.mark.usefixtures("entity_registry_enabled_by_default")
+@pytest.mark.parametrize("supports_enhanced_log", [True])
+async def test_module_log_newer_than_read_wins(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    mock_vantage: Vantage,
+    mock_get_modules: AsyncMock,
+) -> None:
+    """Test that a module log arriving mid-read wins over what that read found."""
+    entity_id = "binary_sensor.module_1_connectivity"
+    await setup_integration(hass, mock_config_entry)
+    await hass.async_block_till_done(wait_background_tasks=True)
+    subscribe = cast(MagicMock, mock_vantage.event_stream.subscribe_system_log)
+
+    # The module drops off while a read is under way, which still finds it
+    async def read_then_log(*_args: Any, **_kwargs: Any) -> list[ModuleInfo]:
+        subscribe.call_args.args[0](
+            SystemLogReceived(
+                SysLogType.INFORMATION, "Station", "Module Offline: 1.1 [3]"
+            )
+        )
+        return [ModuleInfo(address=1, vid=3, errors=0)]
+
+    mock_get_modules.side_effect = read_then_log
+    await mock_config_entry.runtime_data.module_status.async_refresh()
+    await hass.async_block_till_done()
+    assert (state := hass.states.get(entity_id))
+    assert state.state == STATE_OFF
+
+    # The log asked for a read of its own, which finds it gone
+    mock_get_modules.side_effect = None
+    mock_get_modules.return_value = []
+    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=2))
+    await hass.async_block_till_done(wait_background_tasks=True)
+    assert (state := hass.states.get(entity_id))
+    assert state.state == STATE_OFF
+
+    # And an online log turns it back on at once, before any read finds it
+    mock_get_modules.reset_mock()
+    subscribe.call_args.args[0](
+        SystemLogReceived(SysLogType.INFORMATION, "Station", "Module Online: 1.1 [3]")
+    )
+    assert (state := hass.states.get(entity_id))
+    assert state.state == STATE_ON
 
 
 @pytest.mark.usefixtures("entity_registry_enabled_by_default", "init_integration")
